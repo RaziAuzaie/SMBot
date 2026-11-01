@@ -64,6 +64,7 @@ public partial class BuddyWindow : Window
         };
         _emailTimer.Tick += async (_, _) => await CheckEmailsAsync(userAsked: false);
         _blinkTimer.Tick += async (_, _) => await Blink();
+        Bubble.IsVisibleChanged += (_, _) => SetCompact(!Bubble.IsVisible);   // only the bot while the bubble is closed
         ShowFrame("neutral");
     }
 
@@ -77,6 +78,7 @@ public partial class BuddyWindow : Window
         Play("Hover");
         _blinkTimer.Start();
         _ = FileSearchService.BuildAsync(FileSearchService.DefaultFolders());   // file search list, built in the background
+        StartMusic();
 
         if (string.IsNullOrWhiteSpace(_settings.UserName))
             StartOnboarding();
@@ -548,7 +550,7 @@ public partial class BuddyWindow : Window
 
     // Hotkeys from anywhere: Ctrl + Alt + R quick capture (Win + Shift + R belongs to the Snipping Tool recorder on Windows 11),
     // Ctrl + Alt + F file search
-    const int HotkeyId = 1, SearchHotkeyId = 2, WmHotkey = 0x0312;
+    const int HotkeyId = 1, SearchHotkeyId = 2, MusicHotkeyId = 3, WmHotkey = 0x0312;
 
     void RegisterCaptureHotkey()
     {
@@ -565,12 +567,220 @@ public partial class BuddyWindow : Window
                 OpenSearch();
                 handled = true;
             }
+            else if (msg == WmHotkey && wParam.ToInt32() == MusicHotkeyId)
+            {
+                _ = MusicService.PlayPauseAsync();
+                handled = true;
+            }
             return IntPtr.Zero;
         });
         const uint ModAlt = 0x1, ModControl = 0x2, ModNoRepeat = 0x4000, KeyR = 0x52, KeyF = 0x46;
         // If another app owns one, the action list still works
         RegisterHotKey(handle, HotkeyId, ModControl | ModAlt | ModNoRepeat, KeyR);
         RegisterHotKey(handle, SearchHotkeyId, ModControl | ModAlt | ModNoRepeat, KeyF);
+        RegisterHotKey(handle, MusicHotkeyId, ModControl | ModAlt | ModNoRepeat, 0x20 /* Space: play / pause */);
+    }
+
+    // ---- Music: what's playing, controls, now-playing peek, dancing ----
+
+    readonly DispatcherTimer _musicTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    readonly DispatcherTimer _danceTimer = new(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(25) };   // ~40 fps, only while dancing
+    DateTime _musicStartedAt;
+    const string NowPlayingText = "🎵 Now playing";
+
+    async void StartMusic()
+    {
+        await MusicService.StartAsync();
+        _musicStartedAt = DateTime.Now;
+        MusicService.TrackChanged += OnTrackChanged;
+        MusicService.Changed += OnMusicChanged;
+        _musicTimer.Tick += async (_, _) => await MusicService.RefreshAsync();
+        _danceTimer.Tick += (_, _) => DanceStep();
+        _musicTimer.Start();
+    }
+
+    void OnMusicChanged()
+    {
+        if (MusicCard.Visibility == Visibility.Visible) UpdateMusicCard();
+        if (MusicService.Current?.IsPlaying == true && !_danceTimer.IsEnabled) _danceTimer.Start();
+    }
+
+    void UpdateMusicCard()
+    {
+        if (MusicService.Current is not { } now)
+        {
+            MusicCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+        MusicTitle.Text = now.Title;
+        MusicSubtitle.Text = now.Subtitle;
+        MusicCover.Source = now.Cover;
+        MusicPlayButton.Tag = now.IsPlaying ? "" : "";   // pause or play glyph
+        MusicCard.Visibility = Visibility.Visible;
+    }
+
+    // A new song: show it for a few seconds, if the bubble is free. Not for whatever was already playing when SMBot started.
+    async void OnTrackChanged(NowPlaying now)
+    {
+        if (!now.IsPlaying || DateTime.Now - _musicStartedAt < TimeSpan.FromSeconds(5)) return;
+        var showingPeek = Bubble.Visibility == Visibility.Visible && BubbleText.Text == NowPlayingText;
+        if (IsBusy || (Bubble.Visibility == Visibility.Visible && !showingPeek)) return;
+
+        var id = ++_peekId;
+        Say(NowPlayingText);
+        UpdateMusicCard();
+        await Task.Delay(TimeSpan.FromSeconds(4.5));
+        if (id == _peekId && BubbleText.Text == NowPlayingText && ActionPanel.Visibility != Visibility.Visible && !IsBusy)
+            HideBubble();
+    }
+
+    async void MusicPlayPause_Click(object sender, RoutedEventArgs e) { await MusicService.PlayPauseAsync(); await MusicService.RefreshAsync(); }
+    async void MusicNext_Click(object sender, RoutedEventArgs e) { await MusicService.NextAsync(); await MusicService.RefreshAsync(); }
+    async void MusicPrevious_Click(object sender, RoutedEventArgs e) { await MusicService.PreviousAsync(); await MusicService.RefreshAsync(); }
+
+    // ---- Head-bob dance (Spotify only) ----
+    // While Spotify plays, the bot switches to separate head and body layers: the head nods down on each beat and
+    // springs back, with a slight side-to-side sway that alternates each beat; the body grooves a little underneath.
+    // Springs (not keyframes) keep it smooth at about 40 frames a second, which also keeps the CPU cost low.
+    // Beats: loud, mastered songs barely change level, so instead of single jumps it looks for the repeating
+    // pattern in Spotify's level over the last 6 seconds (autocorrelation of the rises), favouring natural
+    // head-bob tempos, and keeps time from that. With no clear beat (speech, ads) it just bobs gently.
+
+    const double SampleRate = 50;                       // level history is kept on a fixed 50 Hz grid
+    readonly System.Diagnostics.Stopwatch _danceClock = System.Diagnostics.Stopwatch.StartNew();
+    readonly Queue<double> _levels = new();              // last 6 s of Spotify's level, 50 per second
+    double _lastFrame, _nextSample, _lastTempoCheck, _quietSince = -1;
+    double _beatPeriod = 0.55, _pendingPeriod, _lastBeat, _confidence;
+    float _loudness;
+    int _beatCount;
+    bool _dancing, _layersOn;
+
+    // Springs: position, velocity
+    double _headY, _headYv, _sway, _swayV, _swayTarget, _bodyY, _bodyYv;
+
+    void DanceStep()
+    {
+        var t = _danceClock.Elapsed.TotalSeconds;
+        var dt = Math.Clamp(t - _lastFrame, 0.001, 0.05);
+        _lastFrame = t;
+
+        var playing = MusicService.Current?.IsPlaying == true;
+        var level = playing ? MusicService.Level() : 0f;
+        _loudness = _loudness * 0.9f + level * 0.1f;
+        while (_nextSample <= t)   // fill the fixed-rate history
+        {
+            _levels.Enqueue(level);
+            if (_levels.Count > SampleRate * 6) _levels.Dequeue();
+            _nextSample = Math.Max(_nextSample + 1 / SampleRate, t - 1);
+        }
+
+        // Dance while Spotify plays and can be heard (not in the silence between songs)
+        if (playing && _loudness > 0.02f) _quietSince = -1;
+        else if (_quietSince < 0) _quietSince = t;
+        var wasDancing = _dancing;
+        _dancing = _quietSince < 0 || t - _quietSince < 0.8;
+        if (_dancing && !wasDancing) _lastBeat = t;
+
+        if (_dancing)
+        {
+            if (t - _lastTempoCheck > 1) { _lastTempoCheck = t; FindTempo(t); }
+            if (t - _lastBeat >= _beatPeriod) OnBeat(t);
+        }
+
+        // Springs: head (stiff, quick bounce), sway (soft glide), body (small dip)
+        Spring(ref _headY, ref _headYv, 0, 260, 22, dt);
+        Spring(ref _sway, ref _swayV, _dancing ? _swayTarget : 0, 50, 10, dt);
+        Spring(ref _bodyY, ref _bodyYv, 0, 300, 30, dt);
+
+        // Show the layers while dancing (a wave or celebrate spin playing on the normal frames takes priority)
+        var layers = (_dancing || Math.Abs(_headY) + Math.Abs(_sway) + Math.Abs(_bodyY) > 0.05) && !_animating;
+        if (layers != _layersOn) SetDanceLayers(layers);
+        HeadBob.Y = _headY;
+        HeadSway.Angle = _sway;
+        DanceBob.Y = _bodyY;
+        DanceTilt.Angle = _sway * 0.3;                    // the body follows the head's sway a little
+        DanceScale.ScaleY = 1 - _bodyY * 0.006;           // and squashes slightly as it dips
+        DanceScale.ScaleX = 1 + _bodyY * 0.003;
+
+        if (!_dancing && !layers && Math.Abs(_headYv) + Math.Abs(_swayV) + Math.Abs(_bodyYv) < 0.05)
+        {
+            _danceTimer.Stop();
+            (HeadBob.Y, HeadSway.Angle, DanceBob.Y, DanceTilt.Angle, DanceScale.ScaleX, DanceScale.ScaleY) = (0, 0, 0, 0, 1, 1);
+        }
+    }
+
+    void OnBeat(double t)
+    {
+        _lastBeat = t;
+        _beatCount++;
+        // Stronger nods for louder music and a clearer beat; a gentle bob when unsure
+        var strength = Math.Clamp(0.55 + _loudness * 1.2, 0.55, 1.1) * (_confidence > 1.25 ? 1 : 0.6);
+        _headYv += 210 * strength;                        // nod down
+        _bodyYv += 55 * strength;                         // small dip
+        if (_beatCount % 2 == 0) _swayTarget = _swayTarget > 0 ? -4 : 4;   // sway to the other side every 2 beats
+    }
+
+    // Beat period from the last 6 s: autocorrelation of the level's rises over 0.33-1 s (60-180 BPM),
+    // weighted towards head-bob tempos (~110 BPM); then line the beat clock up with the strongest pulses
+    void FindTempo(double t)
+    {
+        if (_levels.Count < SampleRate * 3) return;
+        var x = _levels.ToArray();
+        var flux = new double[x.Length];
+        for (var i = 1; i < x.Length; i++) flux[i] = Math.Max(0, x[i] - x[i - 1]);
+
+        int minLag = (int)(SampleRate * 0.33), maxLag = (int)(SampleRate * 1.0), bestLag = 0;
+        double best = 0, total = 0;
+        for (var lag = minLag; lag <= maxLag; lag++)
+        {
+            double s = 0;
+            for (var i = lag; i < flux.Length; i++) s += flux[i] * flux[i - lag];
+            s /= flux.Length - lag;
+            total += s;
+            var prefer = Math.Exp(-Math.Pow(Math.Log(lag / SampleRate / 0.55, 2), 2) / 0.5);   // likes ~0.55 s gaps
+            if (s * prefer > best) { best = s * prefer; bestLag = lag; }
+        }
+        var mean = total / (maxLag - minLag + 1);
+        _confidence = mean > 0 ? best / mean : 0;
+        if (bestLag == 0 || _confidence < 1.1) return;    // no clear beat: keep the current period
+
+        // Keep the tempo steady: small corrections ease in, but a very different tempo (songs can read as 94 or
+        // 143 BPM from one window to the next) is only taken once it shows up twice in a row
+        var candidate = bestLag / SampleRate;
+        if (Math.Abs(candidate - _beatPeriod) / _beatPeriod < 0.08) _beatPeriod = _beatPeriod * 0.7 + candidate * 0.3;
+        else if (_pendingPeriod > 0 && Math.Abs(candidate - _pendingPeriod) / _pendingPeriod < 0.08) { _beatPeriod = candidate; _pendingPeriod = 0; }
+        else { _pendingPeriod = candidate; return; }
+        // Phase: which offset within one period lines up with the most rises, counting back from now
+        double bestPhase = 0, bestSum = -1;
+        for (var phase = 0; phase < bestLag; phase++)
+        {
+            double sum = 0;
+            for (var i = flux.Length - 1 - phase; i >= 0; i -= bestLag) sum += flux[i];
+            if (sum > bestSum) { bestSum = sum; bestPhase = phase; }
+        }
+        var beatAgo = bestPhase / SampleRate;
+        var expected = t - _lastBeat;
+        if (Math.Abs(expected - beatAgo) > 0.08 && Math.Abs(expected - beatAgo) < _beatPeriod - 0.08)
+            _lastBeat = t - beatAgo;                      // nudge the clock onto the music's pulse
+    }
+
+    static void Spring(ref double x, ref double v, double target, double stiffness, double damping, double dt)
+    {
+        v += (-stiffness * (x - target) - damping * v) * dt;
+        x += v * dt;
+    }
+
+    void SetDanceLayers(bool on)
+    {
+        _layersOn = on;
+        if (on)
+        {
+            DanceBody.Source ??= LoadFrame("dancebody");
+            DanceHead.Source ??= LoadFrame("dancehead");
+        }
+        DanceBody.Visibility = DanceHead.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Sprite.Opacity = on ? 0 : 1;   // still there for clicks and hit testing
+        if (!on && !_animating) ShowFrame(_face);
     }
 
     // ---- File search ----
@@ -637,6 +847,7 @@ public partial class BuddyWindow : Window
     void ShowActions()
     {
         Say($"What would you like to do, {_settings.UserName}?");
+        UpdateMusicCard();   // the music card sits on top of the list while something is playing or paused
         ActionPanel.Visibility = Visibility.Visible;
         if (_mood == Mood.Sleepy) Bounce();   // wake up
         HappyMoment();
@@ -658,15 +869,35 @@ public partial class BuddyWindow : Window
 
     // ---- Position and size ----
 
-    const double BaseWidth = 500, BaseHeight = 340;
+    const double BaseWidth = 500, BaseHeight = 440;   // tall enough for the action list with the music card on top
 
     // Where it was last dragged to, if that's still on a screen (a monitor may have been unplugged); otherwise the corner
+    // Saved positions are for the full-size window; the compact one shares its bottom-right corner
     void PlaceWindow()
     {
-        if (_settings.BotLeft is { } left && _settings.BotTop is { } top && OnScreen(left, top))
-            (Left, Top) = (left, top);
+        var s = SizeScale.ScaleX;
+        if (_settings.BotLeft is { } left && _settings.BotTop is { } top
+            && OnScreen(left + BaseWidth * s - Width, top + BaseHeight * s - Height))
+            (Left, Top) = (left + BaseWidth * s - Width, top + BaseHeight * s - Height);
         else
             MoveToCorner();
+    }
+
+    // While the bubble is closed, the window shrinks to just the bot. A transparent window is redrawn whole on every
+    // animation frame, so this cuts the drawing work (and CPU) by about two thirds. The bot stays put: the window
+    // keeps its bottom-right corner.
+    const double CompactWidth = 230, CompactHeight = 276;
+    bool _compact;
+
+    void SetCompact(bool compact)
+    {
+        if (compact == _compact) return;
+        var s = SizeScale.ScaleX;
+        var (right, bottom) = (Left + Width, Top + Height);
+        _compact = compact;
+        Width = (compact ? CompactWidth : BaseWidth) * s;
+        Height = (compact ? CompactHeight : BaseHeight) * s;
+        (Left, Top) = (right - Width, bottom - Height);
     }
 
     void MoveToCorner()
@@ -686,7 +917,8 @@ public partial class BuddyWindow : Window
 
     void SavePosition()
     {
-        (_settings.BotLeft, _settings.BotTop) = (Left, Top);
+        var s = SizeScale.ScaleX;
+        (_settings.BotLeft, _settings.BotTop) = (Left + Width - BaseWidth * s, Top + Height - BaseHeight * s);
         SettingsService.Save(_settings);
     }
 
@@ -696,8 +928,8 @@ public partial class BuddyWindow : Window
         var scale = size switch { "small" => 0.8, "large" => 1.25, _ => 1.0 };
         var (oldWidth, oldHeight) = (Width, Height);
         SizeScale.ScaleX = SizeScale.ScaleY = scale;
-        Width = BaseWidth * scale;
-        Height = BaseHeight * scale;
+        Width = (_compact ? CompactWidth : BaseWidth) * scale;
+        Height = (_compact ? CompactHeight : BaseHeight) * scale;
         if (keepAnchor)
         {
             Left += oldWidth - Width;
@@ -757,24 +989,34 @@ public partial class BuddyWindow : Window
             Mood.Sleepy => "sleepy",
             _ => "neutral",
         };
-        if (!_animating) ShowFrame(_face, fade: true);
+        if (!_animating && !_dancing) ShowFrame(_face, fade: true);   // while dancing, the dance poses show instead
     }
 
     // fade: crossfade from the current frame (used for expression changes, not for animation frames)
     void ShowFrame(string name, bool fade = false)
     {
-        if (!Frames.TryGetValue(name, out var frame))
-        {
-            frame = new BitmapImage(new Uri($"pack://application:,,,/Assets/Bot/{name}.png"));
-            frame.Freeze();
-            Frames[name] = frame;
-        }
+        if (!Frames.TryGetValue(name, out var frame)) Frames[name] = frame = LoadFrame(name);
         if (fade && Sprite.Source is not null && Sprite.Source != frame)
         {
             FadeSprite.Source = Sprite.Source;
             FadeSprite.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(180)));
         }
         Sprite.Source = frame;
+    }
+
+    // The PNGs are 460 px wide (sharp at 200% display scaling); decoding them only as large as this screen needs,
+    // up to the Large size, keeps them small in memory (about 0.4 MB each instead of 1 MB at 100% scaling)
+    BitmapImage LoadFrame(string name)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        var frame = new BitmapImage();
+        frame.BeginInit();
+        frame.UriSource = new Uri($"pack://application:,,,/Assets/Bot/{name}.png");
+        frame.DecodePixelWidth = (int)Math.Min(460, Math.Ceiling(230 * 1.25 * dpi));
+        frame.CacheOption = BitmapCacheOption.OnLoad;
+        frame.EndInit();
+        frame.Freeze();
+        return frame;
     }
 
     // Plays frames in order, then settles back on the current mood's face. A newer animation cancels this one.
@@ -802,10 +1044,10 @@ public partial class BuddyWindow : Window
     async Task Blink()
     {
         _blinkTimer.Interval = TimeSpan.FromSeconds(3 + Random.Shared.NextDouble() * 3);
-        if (_animating || _face is "happy" or "sleepy") return;
+        if (_animating || _dancing || _face is "happy" or "sleepy") return;
         ShowFrame("blink");
         await Task.Delay(110);
-        if (!_animating) ShowFrame(_face);
+        if (!_animating && !_dancing) ShowFrame(_face);
     }
 
     // Happy eyes for a few seconds, then back to normal and start the idle countdown
@@ -899,6 +1141,7 @@ public partial class BuddyWindow : Window
         MissedPanel.Visibility = Visibility.Collapsed;
         RecentList.Visibility = Visibility.Collapsed;
         ActionPanel.Visibility = Visibility.Collapsed;
+        MusicCard.Visibility = Visibility.Collapsed;
         Bubble.Visibility = Visibility.Visible;
     }
 
@@ -913,6 +1156,7 @@ public partial class BuddyWindow : Window
         MissedPanel.Visibility = Visibility.Collapsed;
         RecentList.Visibility = Visibility.Collapsed;
         ActionPanel.Visibility = Visibility.Collapsed;
+        MusicCard.Visibility = Visibility.Collapsed;
         SetMood(Mood.Neutral);
     }
 

@@ -37,6 +37,9 @@ const FRAMES = {
 };
 for (let i = 0; i < 12; i++) FRAMES['spin' + i] = { eyes: 'happy', finL: 0.9, finR: 0.9, spin: (i + 1) / 12 * Math.PI * 2 };
 FRAMES.icon = { eyes: 'neutral', icon: true };   // head only, facing front, square: the app icon
+// Dance layers: the head and the body (with fins) drawn separately, same camera, so the app can bob the head on its own
+FRAMES.dancehead = { eyes: 'happy', only: 'head' };
+FRAMES.dancebody = { eyes: 'happy', only: 'body' };
 
 const f = { finL: 0.12, finR: 0.12, spin: 0, tilt: 0, nod: 0, ...FRAMES[new URLSearchParams(location.search).get('frame') ?? 'neutral'] };
 
@@ -82,7 +85,7 @@ for (let i = 0; i <= 160; i++) {
 }
 const body = new THREE.Mesh(new THREE.LatheGeometry(pts, 220), shell);
 body.position.y = -0.25;
-if (!f.icon) robot.add(body);
+if (!f.icon && f.only !== 'head') robot.add(body);
 
 // Head, visor, eyes: the whole head is scaled up so the face reads at desktop size
 const head = new THREE.Group();
@@ -90,7 +93,7 @@ head.position.y = 1.29;
 head.scale.setScalar(1.22);
 head.rotation.z = -f.tilt;   // negative z leans toward screen-left (the bubble)
 head.rotation.x = f.nod;
-robot.add(head);
+if (f.only !== 'body') robot.add(head);
 
 const skull = new THREE.Mesh(new THREE.SphereGeometry(0.62, 160, 120), shell);
 skull.scale.set(1, 0.74, 0.92);
@@ -146,7 +149,7 @@ for (const side of [-1, 1]) {
   fin.position.y = -0.4;
   pivot.add(fin);
   pivot.rotation.z = side * (side < 0 ? f.finL : f.finR);
-  if (!f.icon) robot.add(pivot);
+  if (!f.icon && f.only !== 'head') robot.add(pivot);
 }
 
 renderer.render(scene, camera);

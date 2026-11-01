@@ -1,7 +1,7 @@
 <Window x:Class="SMBot.Views.BuddyWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SMBot" Width="500" Height="340"
+        Title="SMBot" Width="500" Height="440"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
         Loaded="Window_Loaded" Icon="/Assets/smbot.ico">
@@ -56,6 +56,26 @@
             </Setter>
         </Style>
 
+        <!-- Round icon buttons for music: the glyph (Segoe Fluent Icons) comes from Tag -->
+        <Style x:Key="MusicButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Face" Background="Transparent" CornerRadius="12" Width="30" Height="24">
+                            <TextBlock Text="{TemplateBinding Tag}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                                       Foreground="#7E5FDB" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Face" Property="Background" Value="#E3D8FF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Small purple buttons in the speech bubble -->
         <Style x:Key="BubbleButton" TargetType="Button">
             <Setter Property="FontSize" Value="11.5"/>
@@ -102,7 +122,8 @@
         </DataTemplate>
 
         <!-- Gentle hover bob, forever -->
-        <Storyboard x:Key="Hover" RepeatBehavior="Forever" AutoReverse="True">
+        <!-- 30 frames a second is plenty for a slow bob, and halves the redraw work of the transparent window -->
+        <Storyboard x:Key="Hover" RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="30">
             <DoubleAnimation Storyboard.TargetName="BobTransform" Storyboard.TargetProperty="Y"
                              From="0" To="-7" Duration="0:0:1.6">
                 <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
@@ -265,6 +286,30 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
+                <!-- What's playing, with controls: at the top of the action list, and on its own as the "now playing" peek -->
+                <Border x:Name="MusicCard" Margin="0,8,0,2" Padding="8" CornerRadius="10" Background="#F6F1FF"
+                        BorderBrush="#E3D8FF" BorderThickness="1" Visibility="Collapsed">
+                    <DockPanel>
+                        <Grid DockPanel.Dock="Left" Width="48" Height="48" Margin="0,0,10,0" VerticalAlignment="Center">
+                            <Border CornerRadius="8" Background="#E3D8FF"/>
+                            <TextBlock Text="&#xE8D6;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="20" Foreground="#9B82EA"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Image x:Name="MusicCover" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality">
+                                <Image.Clip><RectangleGeometry Rect="0,0,48,48" RadiusX="8" RadiusY="8"/></Image.Clip>
+                            </Image>
+                        </Grid>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="MusicTitle" FontSize="12.5" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="MusicSubtitle" FontSize="11" Foreground="#8A7DB8" TextTrimming="CharacterEllipsis"/>
+                            <StackPanel Orientation="Horizontal" Margin="-6,2,0,0">
+                                <Button Style="{StaticResource MusicButton}" Tag="&#xE892;" ToolTip="Previous" Click="MusicPrevious_Click"/>
+                                <Button x:Name="MusicPlayButton" Style="{StaticResource MusicButton}" Tag="&#xE769;" ToolTip="Play / pause (Ctrl+Alt+Space)" Click="MusicPlayPause_Click"/>
+                                <Button Style="{StaticResource MusicButton}" Tag="&#xE893;" ToolTip="Next" Click="MusicNext_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
                 <!-- What the bot can do, shown on left click -->
                 <StackPanel x:Name="ActionPanel" Margin="0,6,0,0" Visibility="Collapsed">
                     <Button Style="{StaticResource ActionButton}" Tag="&#xE823;" Content="Add reminder" Click="ActionAddReminder_Click"/>
@@ -307,11 +352,28 @@
                         <ScaleTransform x:Name="SquashScale" CenterX="115" CenterY="252"/>
                         <TranslateTransform x:Name="JumpTransform"/>
                         <TranslateTransform x:Name="BobTransform"/>
+                        <!-- Dancing to music: set every frame from the sound level, on top of the hover -->
+                        <ScaleTransform x:Name="DanceScale" CenterX="115" CenterY="252"/>
+                        <RotateTransform x:Name="DanceTilt" CenterX="115" CenterY="252"/>
+                        <TranslateTransform x:Name="DanceBob"/>
                     </TransformGroup>
                 </Canvas.RenderTransform>
                 <Image x:Name="Sprite" Width="230" Height="260" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <Image x:Name="FadeSprite" Width="230" Height="260" Opacity="0" IsHitTestVisible="False"
                        RenderOptions.BitmapScalingMode="HighQuality"/>
+
+                <!-- Dancing: the head and body as separate layers, so the head can bob on its own (pivot at the neck) -->
+                <Image x:Name="DanceBody" Width="230" Height="260" Visibility="Collapsed" IsHitTestVisible="False"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                <Image x:Name="DanceHead" Width="230" Height="260" Visibility="Collapsed" IsHitTestVisible="False"
+                       RenderOptions.BitmapScalingMode="HighQuality">
+                    <Image.RenderTransform>
+                        <TransformGroup>
+                            <RotateTransform x:Name="HeadSway" CenterX="115" CenterY="132"/>
+                            <TranslateTransform x:Name="HeadBob"/>
+                        </TransformGroup>
+                    </Image.RenderTransform>
+                </Image>
 
                 <!-- How many items are due today (including overdue), by the head; hidden at 0 -->
                 <Border x:Name="Badge" Canvas.Left="158" Canvas.Top="46" MinWidth="24" Height="24" CornerRadius="12" Padding="6,0"

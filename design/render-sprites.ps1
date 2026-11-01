@@ -8,7 +8,7 @@ $out = Join-Path $PSScriptRoot "..\src\SMBot\Assets\Bot"
 $profileDir = Join-Path $env:TEMP "smbot-sprite-render"
 New-Item -ItemType Directory -Force $out | Out-Null
 
-$frames = @("neutral", "blink", "happy", "curious", "surprised", "sleepy", "wave1", "wave2", "wave3", "wave4") + (0..11 | ForEach-Object { "spin$_" })
+$frames = @("neutral", "blink", "happy", "curious", "surprised", "sleepy", "wave1", "wave2", "wave3", "wave4", "dancehead", "dancebody") + (0..11 | ForEach-Object { "spin$_" })
 foreach ($frame in $frames) {
     # 460x520 is twice the 230x260 size the bot is shown at, so it stays sharp on high-DPI screens
     & $edge --headless=new --use-angle=swiftshader --enable-unsafe-swiftshader --hide-scrollbars `

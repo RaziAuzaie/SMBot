@@ -13,6 +13,7 @@ emails, reminders and a checklist, recent files, fast file search, and (planned)
 | Feature 3: reminders and checklist | ✅ Built, incl. editing, Completed, grouped missed reminders, more snooze options; smart delivery, sub-tasks, tags, daily routine still planned |
 | Feature 4: recent files | ✅ Built |
 | Feature 5: file search (Ctrl + Alt + F) | ✅ Built |
+| Feature 6: music (now playing, controls, dancing) | ✅ Built |
 | Single instance, app icon, crash log | ✅ Built |
 | Settings window, tray icon, toasts, start with Windows | ⏳ Not built |
 
@@ -64,7 +65,7 @@ emails, reminders and a checklist, recent files, fast file search, and (planned)
 - Planned: Pointing, Stretch, seasonal outfits, hides at the screen edge.
 
 ### Interaction (built)
-- **Left click:** "What would you like to do, {Name}?" with **Add reminder, Checklist, Recent files, Check emails, Search files**.
+- **Left click:** "What would you like to do, {Name}?" with the music card (when something is playing) and **Add reminder, Checklist, Recent files, Check emails, Search files**.
   Clicking again closes it. A click with a few pixels of hand wobble still counts as a click; more is a drag.
 - **Right click:** only **Reset onboarding** and **Exit**.
 - **Drag** to move it. Always on top, not on the taskbar.
@@ -76,7 +77,7 @@ emails, reminders and a checklist, recent files, fast file search, and (planned)
 - **Size:** right click → Size → Small (80%), Medium, Large (125%). Scales the whole bot and bubble, keeping its bottom-right corner in place.
 - **Count badge:** a small purple number by the head for open items due today (overdue included), hidden at 0. Planned: the next meeting
   in the status peek once the calendar (Feature 2) exists.
-- **Hotkeys:** `Ctrl + Alt + R` quick capture, `Ctrl + Alt + F` file search.
+- **Hotkeys:** `Ctrl + Alt + R` quick capture, `Ctrl + Alt + F` file search, `Ctrl + Alt + Space` music play / pause.
 - **Single instance:** starting `SMBot.exe` again doesn't add a bot. The running one comes forward (back on screen if needed) and shows
   its action list. `SMBot.exe --checklist` opens the checklist (in the running bot if there is one).
 
@@ -182,6 +183,36 @@ Faster and more forgiving than Windows Search for the user's own files.
 - Filters: `.pdf`, `type:excel|word|pdf|ppt|image|video|zip|text`, `in:downloads`. They combine.
 - Searches take about 5–90 ms (tested on the real folders).
 - Planned: searching inside text files (.txt, .log, .csv), choosing which folders to include.
+
+## Feature 6: music, Spotify only (built 2026-11-01)
+**Spotify only** (changed the same day at the user's request): browsers, streams, VLC and other players are ignored, so watching a
+stream doesn't make the bot dance. Uses Windows' own media controls (`GlobalSystemMediaTransportControlsSessionManager`),
+so no Spotify login and nothing leaves the PC.
+- **Music card:** cover, title, artist · Spotify, and ⏮ ⏯ ⏭, at the top of the left-click action list while Spotify is playing or paused.
+- **Now-playing peek:** when the song changes, "🎵 Now playing" with the music card for 4.5 seconds, only if the bubble is free
+  (not for whatever was already playing when SMBot started).
+- **Hotkey:** `Ctrl + Alt + Space` play / pause from anywhere. No next/previous hotkeys (Ctrl + Alt + arrows rotate the screen
+  on some PCs, and keyboards already have media keys).
+- **Head-bob dance** (replaced a pose-swapping "robot dance" the user found choppy): while Spotify plays, the bot switches to
+  separate **head and body layers** (`dancehead.png`, `dancebody.png`, rendered from the same 3D scene). On each beat the head
+  **nods down and springs back**, with a slight side-to-side sway that alternates every 2 beats; the body dips and squashes a
+  little and follows the sway. Spring physics (not keyframes), about 40 frames a second, only while dancing. It stops in the
+  silence between songs and when Spotify pauses; a greeting wave or celebrate spin still plays on the normal frames.
+- **Beat tracking:** from **Spotify's own audio session** (Windows Core Audio per-app peak meter, via `IAudioSessionManager2`),
+  so other sounds don't count. Loud mastered songs barely change level (measured 0.38 average, 0.49 peak), so instead of single
+  jumps it autocorrelates the level's rises over the last 6 s (50 Hz history, 0.33–1 s lags = 60–180 BPM), weighted towards
+  head-bob tempos (~110 BPM), and lines the beat clock up with the strongest pulses. A very different tempo is only taken once
+  seen twice in a row, so the bob stays steady. With no clear beat (speech, ads) it bobs gently.
+
+## Resource use (measured 2026-11-01, Ryzen 5 5600X, 12 threads, 16 GB)
+- **Memory:** about 210 MB (was 393 MB). File search stores each folder path once with one short key per file
+  (98,000 files: 34 MB, was 136 MB), its build garbage is released right after, and bot frames are decoded at screen size.
+- **CPU:** the window shrinks to just the bot while the bubble is closed (a transparent window is redrawn whole every frame),
+  and the hover runs at 30 frames a second. Idle about 4% of one core (0.3% of the CPU); dancing to Spotify about 5% of one
+  core at Large size (was 32%).
+- **Disk:** `SMBot.exe` about 26 MB; data files a few KB.
+- Can't do (would need a Spotify account connection): playlists, search, liking songs, lyrics, tempo-based moods.
+- The project targets `net10.0-windows10.0.19041.0` for this, which makes `SMBot.exe` about 26 MB (it includes the Windows API projection).
 
 ## Other ideas (later)
 - "In a call" detection (Teams using the microphone → stay quiet), system/website watcher with log-file error alerts,
