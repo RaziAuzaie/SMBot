@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SMBot sprite frames</title>
+<!-- Renders one transparent frame of the Soft Satin bot: smbot-sprites.html?frame=happy
+     Frames are listed in FRAMES below; render-sprites.ps1 screenshots each one. -->
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+// eyes: neutral | happy | curious | surprised | sleepy | blink
+// finL/finR: fin angle out from the body (radians), spin: turn around (radians), tilt: head tilt toward the bubble
+const FRAMES = {
+  neutral:   { eyes: 'neutral' },
+  blink:     { eyes: 'blink' },
+  happy:     { eyes: 'happy', finL: 0.35, finR: 0.35 },
+  curious:   { eyes: 'curious', tilt: 0.2 },
+  surprised: { eyes: 'surprised', finL: 0.3, finR: 0.3 },
+  sleepy:    { eyes: 'sleepy', nod: 0.14, tilt: -0.08 },
+  wave1: { eyes: 'happy', finR: 0.9 },
+  wave2: { eyes: 'happy', finR: 1.7 },
+  wave3: { eyes: 'happy', finR: 2.3 },
+  wave4: { eyes: 'happy', finR: 1.9 },
+};
+for (let i = 0; i < 12; i++) FRAMES['spin' + i] = { eyes: 'happy', finL: 0.9, finR: 0.9, spin: (i + 1) / 12 * Math.PI * 2 };
+FRAMES.icon = { eyes: 'neutral', icon: true };   // head only, facing front, square: the app icon
+
+const f = { finL: 0.12, finR: 0.12, spin: 0, tilt: 0, nod: 0, ...FRAMES[new URLSearchParams(location.search).get('frame') ?? 'neutral'] };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(devicePixelRatio);
+const W = f.icon ? 256 : 460, H = f.icon ? 256 : 520;   // fixed: the headless page viewport is shorter than the screenshot
+renderer.setSize(W, H);
+renderer.setClearColor(0x000000, 0);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.85;
+document.body.append(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(30, W / H, 0.1, 100);
+const q = new URLSearchParams(location.search);
+if (f.icon) camera.position.set(0, 1.5, 3.7); else camera.position.set(0, +(q.get('cy') ?? 0.85), +(q.get('cz') ?? 7.4));
+camera.lookAt(0, f.icon ? 1.29 : +(q.get('ly') ?? 0.77), 0);
+
+const key = new THREE.DirectionalLight('#ffffff', 0.9); key.position.set(3, 4, 5); scene.add(key);
+const rim = new THREE.DirectionalLight('#b69cff', 1.6); rim.position.set(-4, 2.5, -3); scene.add(rim);
+const under = new THREE.PointLight('#b69cff', 4, 4); under.position.set(0, -1.9, 0.4); scene.add(under);
+// Soft fill from below and the front, so the underside of the head isn't a dark band
+scene.add(new THREE.HemisphereLight('#ffffff', '#c9b8f5', 0.8));
+const fill = new THREE.DirectionalLight('#f1ebff', 0.6); fill.position.set(0, -1.5, 5); scene.add(fill);
+
+// Soft Satin shell
+const shell = new THREE.MeshPhysicalMaterial({
+  color: '#c2b0f0', roughness: 0.45, clearcoat: 0.25, clearcoatRoughness: 0.35,
+  sheen: 1, sheenColor: '#ffffff', sheenRoughness: 0.5, envMapIntensity: 0.7,
+});
+
+const robot = new THREE.Group();
+robot.rotation.y = f.icon ? -0.28 : -0.3 + f.spin;   // three-quarter view, facing the speech bubble on the left
+scene.add(robot);
+
+// Egg body (kept short so the big head and face lead)
+const pts = [];
+for (let i = 0; i <= 160; i++) {
+  const t = i / 160 * Math.PI;
+  pts.push(new THREE.Vector2(Math.max(0.6 * Math.sin(t) * (1 - 0.3 * Math.cos(t)), 1e-4), -Math.cos(t) * 0.85));
+}
+const body = new THREE.Mesh(new THREE.LatheGeometry(pts, 220), shell);
+body.position.y = -0.25;
+if (!f.icon) robot.add(body);
+
+// Head, visor, eyes: the whole head is scaled up so the face reads at desktop size
+const head = new THREE.Group();
+head.position.y = 1.29;
+head.scale.setScalar(1.22);
+head.rotation.z = -f.tilt;   // negative z leans toward screen-left (the bubble)
+head.rotation.x = f.nod;
+robot.add(head);
+
+const skull = new THREE.Mesh(new THREE.SphereGeometry(0.62, 160, 120), shell);
+skull.scale.set(1, 0.74, 0.92);
+head.add(skull);
+
+const visor = new THREE.Mesh(new THREE.SphereGeometry(0.62, 160, 120),
+  new THREE.MeshPhysicalMaterial({ color: '#141026', roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 0.3 }));
+visor.scale.set(0.92, 0.627, 0.8);   // radii 0.570 x 0.389: a big face with room around the eyes, and a lavender rim still showing
+visor.position.z = 0.1;
+head.add(visor);
+
+const glowTex = radialTexture();
+const eyeMat = new THREE.MeshStandardMaterial({ color: '#000000', emissive: '#e6dbff', emissiveIntensity: f.eyes === 'sleepy' ? 1.4 : 2.6 });
+for (const side of [-1, 1]) {
+  const x = side * 0.22, y = f.eyes === 'sleepy' ? -0.02 : 0.02;
+  const z = 0.1 + 0.496 * Math.sqrt(1 - (x / 0.57) ** 2 - (y / 0.389) ** 2) + 0.012;   // just above the curved visor
+
+  // Soft glow on the visor behind each eye (no bloom pass, so the frame keeps a clean transparent background)
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(0.37, 0.26),
+    new THREE.MeshBasicMaterial({ map: glowTex, color: '#b69cff', transparent: true, opacity: f.eyes === 'sleepy' ? 0.4 : 0.75, blending: THREE.AdditiveBlending, depthWrite: false }));
+  glow.position.set(x, y, z + 0.004);
+  glow.rotation.y = x * 0.9;
+  head.add(glow);
+
+  let eye;
+  if (f.eyes === 'happy') {
+    eye = new THREE.Mesh(new THREE.TorusGeometry(0.108, 0.04, 32, 96, Math.PI), eyeMat);   // ∩ arcs = ^ ^
+    eye.scale.y = 0.85;
+    eye.position.set(x, y - 0.03, z + 0.008);
+  } else {
+    const [sx, sy] = { neutral: [0.132, 0.084], blink: [0.138, 0.015], curious: [0.143, 0.094],
+                       surprised: [0.154, 0.119], sleepy: [0.132, 0.029] }[f.eyes];
+    eye = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), eyeMat);
+    eye.scale.set(sx, sy, 0.02);
+    eye.position.set(x, y, z);
+  }
+  eye.rotation.y = x * 0.9;
+  head.add(eye);
+}
+
+// Fins hang from the shoulders and swing out from the pivot
+const finPts = [];
+for (let i = 0; i <= 100; i++) {
+  const t = i / 100 * Math.PI;
+  finPts.push(new THREE.Vector2(Math.max(0.15 * Math.sin(t) * (1 - 0.35 * Math.cos(t)), 1e-4), -Math.cos(t) * 0.55));
+}
+const finGeo = new THREE.LatheGeometry(finPts, 120);
+for (const side of [-1, 1]) {
+  const pivot = new THREE.Group();
+  pivot.position.set(side * 0.6, 0.3, -0.02);
+  const fin = new THREE.Mesh(finGeo, shell);
+  fin.scale.set(1, 0.8, 0.45);   // shorter, to match the shorter body
+  fin.position.y = -0.4;
+  pivot.add(fin);
+  pivot.rotation.z = side * (side < 0 ? f.finL : f.finR);
+  if (!f.icon) robot.add(pivot);
+}
+
+renderer.render(scene, camera);
+requestAnimationFrame(() => { renderer.render(scene, camera); document.title = 'ready'; });
+
+function radialTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
+}
+</script>
+</body>
+</html>

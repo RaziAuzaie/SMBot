@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+publish/
+
+# Visual Studio / editor files
+.vs/
+*.user
+*.suo
+
+# Shortcuts and Windows clutter
+*.lnk
+Thumbs.db
+desktop.ini

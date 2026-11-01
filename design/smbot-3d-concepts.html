@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SMBot 3D concepts</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #15111f; font-family: "Segoe UI", sans-serif; color: #ece6ff; overflow: hidden; }
+  #grid { display: flex; height: 100%; }
+  .panel { flex: 1; min-width: 0; position: relative; overflow: hidden; }
+  .panel canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+  .label { position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; pointer-events: none; }
+  .label b { display: block; font-size: 22px; font-weight: 600; letter-spacing: .3px; }
+  .label span { font-size: 14px; color: #aa9cd8; }
+  .tag { position: absolute; top: 20px; left: 24px; font-size: 13px; color: #8f82bd; letter-spacing: 2px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="grid"></div>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const hero = new URLSearchParams(location.search).has('hero');
+
+const variants = [
+  { tag: 'A', name: 'Pearl Gloss', note: 'Glossy lavender shell · mirror visor', mood: 'neutral',
+    body: { color: '#bba3f2', roughness: 0.16, clearcoat: 1, clearcoatRoughness: 0.04 } },
+  { tag: 'B', name: 'Soft Satin', note: 'Satin finish · happy eyes', mood: 'happy',
+    body: { color: '#c2b0f0', roughness: 0.45, clearcoat: 0.25, clearcoatRoughness: 0.35, sheen: 1, sheenColor: '#ffffff', sheenRoughness: 0.5 } },
+  { tag: 'C', name: 'Iridescent Pearl', note: 'Colour-shifting shell · waving', mood: 'wave',
+    body: { color: '#e6ddff', roughness: 0.08, clearcoat: 1, clearcoatRoughness: 0.02, iridescence: 1, iridescenceIOR: 1.8, iridescenceThicknessRange: [100, 900] } },
+];
+const list = hero
+  ? [{ ...variants[0], tag: 'CLOSE-UP', name: 'Pearl Gloss', note: 'Happy greeting · high-poly shell', mood: 'happy' }]
+  : variants;
+
+// Lay out every panel first so each one gets its share of the width
+const grid = document.getElementById('grid');
+const panels = list.map(v => {
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = `<div class="tag">${v.tag}</div><div class="label"><b>${v.name}</b><span>${v.note}</span></div>`;
+  grid.append(panel);
+  return panel;
+});
+list.forEach((v, i) => build(v, panels[i]));
+
+function build(v, panel) {
+  const w = panel.clientWidth, h = panel.clientHeight;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(w, h);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.85;
+  panel.prepend(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = gradientTexture();
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+  const camera = new THREE.PerspectiveCamera(hero ? 26 : 30, w / h, 0.1, 100);
+  camera.position.set(hero ? 1.3 : 1.1, hero ? 1.1 : 0.75, hero ? 6.6 : 7.6);
+  camera.lookAt(0, hero ? 0.45 : 0.15, 0);
+
+  // Studio lighting: soft white key, purple rim, purple glow from below
+  const key = new THREE.DirectionalLight('#ffffff', 0.9); key.position.set(3, 4, 5); scene.add(key);
+  const rim = new THREE.DirectionalLight('#b69cff', 1.6); rim.position.set(-4, 2.5, -3); scene.add(rim);
+  const under = new THREE.PointLight('#b69cff', 4, 4); under.position.set(0, -1.9, 0.4); scene.add(under);
+
+  const robot = makeRobot(v);
+  robot.rotation.y = hero ? 0.32 : 0.38;   // three-quarter view, face turned toward the camera
+  scene.add(robot);
+
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  // Threshold above 1 so only the emissive eyes (and the glow pool) bloom, not the shiny shell
+  composer.addPass(new UnrealBloomPass(new THREE.Vector2(w, h), 0.5, 0.5, 1.0));
+  composer.addPass(new OutputPass());
+
+  const clock = new THREE.Clock();
+  (function frame() {
+    const t = clock.getElapsedTime();
+    robot.position.y = Math.sin(t * 1.6) * 0.04;   // gentle hover
+    composer.render();
+    requestAnimationFrame(frame);
+  })();
+}
+
+function makeRobot(v) {
+  const robot = new THREE.Group();
+  const shell = new THREE.MeshPhysicalMaterial({ envMapIntensity: 0.7, ...v.body });
+
+  // Egg body: smooth lathe, wide at the shoulders, tapering to a point
+  const pts = [];
+  for (let i = 0; i <= 160; i++) {
+    const t = i / 160 * Math.PI;
+    const r = 0.6 * Math.sin(t) * (1 - 0.3 * Math.cos(t));
+    pts.push(new THREE.Vector2(Math.max(r, 1e-4), -Math.cos(t) * 1.15));
+  }
+  const body = new THREE.Mesh(new THREE.LatheGeometry(pts, 220), shell);
+  body.position.y = -0.25;
+  robot.add(body);
+
+  // Floating head with a glossy dark visor
+  const head = new THREE.Group();
+  head.position.y = 1.5;
+  if (v.mood === 'wave') head.rotation.z = 0.12;
+  robot.add(head);
+
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.62, 160, 120), shell);
+  skull.scale.set(1, 0.74, 0.92);
+  head.add(skull);
+
+  const visorMat = new THREE.MeshPhysicalMaterial({ color: '#07050f', roughness: 0.12, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 0.3 });
+  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.62, 160, 120), visorMat);
+  visor.scale.set(0.84, 0.56, 0.8);
+  visor.position.z = 0.1;
+  head.add(visor);
+
+  // Glowing eyes on the visor surface
+  const eyeMat = new THREE.MeshStandardMaterial({ color: '#000000', emissive: '#dccbff', emissiveIntensity: 3 });
+  for (const side of [-1, 1]) {
+    const x = side * 0.17, y = 0.02;
+    const z = 0.1 + 0.496 * Math.sqrt(1 - (x / 0.52) ** 2 - (y / 0.347) ** 2);
+    let eye;
+    if (v.mood === 'happy') {
+      eye = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.024, 32, 96, Math.PI), eyeMat);   // ∩ arc = ^ ^ eyes
+      eye.scale.y = 0.85;
+      eye.position.set(x, y - 0.03, z + 0.005);
+    } else {
+      eye = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), eyeMat);
+      eye.scale.set(0.105, 0.066, 0.02);
+      eye.position.set(x, y, z);
+    }
+    eye.rotation.y = x * 0.9;
+    head.add(eye);
+  }
+
+  // Fins: flattened teardrops hanging from the shoulders (pivot at the top)
+  const finPts = [];
+  for (let i = 0; i <= 100; i++) {
+    const t = i / 100 * Math.PI;
+    finPts.push(new THREE.Vector2(Math.max(0.15 * Math.sin(t) * (1 - 0.35 * Math.cos(t)), 1e-4), -Math.cos(t) * 0.55));
+  }
+  const finGeo = new THREE.LatheGeometry(finPts, 120);
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.63, 0.42, -0.02);
+    const fin = new THREE.Mesh(finGeo, shell);
+    fin.scale.z = 0.45;
+    fin.position.y = -0.5;
+    pivot.add(fin);
+    pivot.rotation.z = side * 0.12;
+    if (v.mood === 'wave' && side === 1) pivot.rotation.z = 2.2;
+    if (v.mood === 'happy') pivot.rotation.z = side * 0.35;
+    robot.add(pivot);
+  }
+
+  // Soft purple glow pool under the hovering body
+  const glow = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.8, 1.8),
+    new THREE.MeshBasicMaterial({ map: radialTexture(), color: '#b69cff', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  glow.rotation.x = -Math.PI / 2;
+  glow.position.y = -1.85;
+  glow.scale.set(1, 0.6, 1);
+  robot.add(glow);
+
+  return robot;
+}
+
+function gradientTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(256, 210, 20, 256, 256, 380);
+  grad.addColorStop(0, '#332a52'); grad.addColorStop(1, '#100c1a');
+  g.fillStyle = grad; g.fillRect(0, 0, 512, 512);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function radialTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
+}
+</script>
+</body>
+</html>

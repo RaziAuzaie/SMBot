@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationIcon>Assets\smbot.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 3D bot frames rendered by design/render-sprites.ps1 -->
+    <Resource Include="Assets\Bot\*.png" />
+    <!-- SMBot head icon made by design/make-icon.ps1 -->
+    <Resource Include="Assets\smbot.ico" />
+    <Resource Include="Assets\smbot-head.png" />
+  </ItemGroup>
+
+</Project>
