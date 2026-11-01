@@ -113,7 +113,9 @@
 
     </Window.Resources>
 
-    <Grid>
+    <!-- Root is scaled for the Small / Medium / Large size setting -->
+    <Grid x:Name="Root">
+        <Grid.LayoutTransform><ScaleTransform x:Name="SizeScale"/></Grid.LayoutTransform>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
             <!-- Extra room on the right so the waving fin isn't cut off by the window edge -->
@@ -182,10 +184,55 @@
                 </StackPanel>
 
                 <!-- Actions for a reminder that's due -->
-                <StackPanel x:Name="DuePanel" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0" Visibility="Collapsed">
-                    <Button Content="10 min" ToolTip="Snooze 10 minutes" Style="{StaticResource BubbleButton}" Click="Snooze10_Click"/>
-                    <Button Content="1 hour" ToolTip="Snooze 1 hour" Style="{StaticResource BubbleButton}" Click="Snooze60_Click"/>
-                    <Button Content="✓ Done" Style="{StaticResource PrimaryBubbleButton}" Click="ReminderDone_Click"/>
+                <StackPanel x:Name="DuePanel" Margin="0,10,0,0" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="10 min" ToolTip="Snooze 10 minutes" Style="{StaticResource BubbleButton}" Padding="8,3" Click="Snooze10_Click"/>
+                        <Button Content="1 hour" ToolTip="Snooze 1 hour" Style="{StaticResource BubbleButton}" Padding="8,3" Click="Snooze60_Click"/>
+                        <Button Content="Later…" ToolTip="More snooze options" Style="{StaticResource BubbleButton}" Padding="8,3" Click="SnoozeMore_Click"/>
+                        <Button Content="✓ Done" Style="{StaticResource PrimaryBubbleButton}" Padding="8,3" Click="ReminderDone_Click"/>
+                    </StackPanel>
+                    <!-- More snooze choices: fixed ones, or type a time -->
+                    <StackPanel x:Name="SnoozeMorePanel" Margin="0,8,0,0" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="After lunch" Style="{StaticResource BubbleButton}" Padding="8,3" Click="SnoozeLunch_Click"/>
+                            <Button Content="Tomorrow morning" Style="{StaticResource BubbleButton}" Padding="8,3" Click="SnoozeMorning_Click"/>
+                        </StackPanel>
+                        <DockPanel Margin="0,6,0,0">
+                            <Button DockPanel.Dock="Right" Content="Set" Style="{StaticResource PrimaryBubbleButton}" Padding="10,3" Click="SnoozeCustom_Click"/>
+                            <Grid>
+                                <TextBlock x:Name="SnoozeHint" Text="or type a time: 4pm, tomorrow 10am" FontSize="11.5" Foreground="#B3A8D6"
+                                           Margin="7,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                                <TextBox x:Name="SnoozeBox" FontSize="12" Padding="4,3" BorderBrush="#C9B8F5" Background="Transparent"
+                                         TextChanged="SnoozeBox_TextChanged" KeyDown="SnoozeBox_KeyDown"/>
+                            </Grid>
+                        </DockPanel>
+                        <TextBlock x:Name="SnoozeError" FontSize="11" Foreground="#C0392B" TextWrapping="Wrap" Margin="2,4,0,0" Visibility="Collapsed"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Several reminders went off while away: listed together instead of one pop-up each -->
+                <StackPanel x:Name="MissedPanel" Margin="0,6,0,0" Visibility="Collapsed">
+                    <ItemsControl x:Name="MissedList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel Margin="0,3">
+                                    <Button DockPanel.Dock="Right" Content="✓" ToolTip="Done" Style="{StaticResource BubbleButton}" Padding="7,1"
+                                            VerticalAlignment="Center" Click="MissedDone_Click"/>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Text}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding When}" FontSize="11" Foreground="#8A7DB8"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="MissedMore" FontSize="11" Foreground="#8A7DB8" Margin="0,2,0,0" Visibility="Collapsed"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button Content="Snooze 1h" ToolTip="Snooze all for 1 hour" Style="{StaticResource BubbleButton}" Padding="8,3" Click="MissedSnoozeAll_Click"/>
+                        <Button Content="Checklist" Style="{StaticResource BubbleButton}" Padding="8,3" Click="MissedChecklist_Click"/>
+                        <Button Content="✓ All done" Style="{StaticResource PrimaryBubbleButton}" Padding="8,3" Click="MissedAllDone_Click"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- Recently opened files: click one to open its folder -->
@@ -236,6 +283,12 @@
             <Canvas.ContextMenu>
                 <!-- Everyday actions are on left click; right click only has these -->
                 <ContextMenu>
+                    <MenuItem Header="Size">
+                        <MenuItem x:Name="SizeSmall" Header="Small" Tag="small" IsCheckable="True" Click="Size_Click"/>
+                        <MenuItem x:Name="SizeMedium" Header="Medium" Tag="medium" IsCheckable="True" Click="Size_Click"/>
+                        <MenuItem x:Name="SizeLarge" Header="Large" Tag="large" IsCheckable="True" Click="Size_Click"/>
+                    </MenuItem>
+                    <Separator/>
                     <MenuItem Header="Reset onboarding" Click="Reset_Click"/>
                     <MenuItem Header="Exit" Click="Exit_Click"/>
                 </ContextMenu>
@@ -259,6 +312,22 @@
                 <Image x:Name="Sprite" Width="230" Height="260" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <Image x:Name="FadeSprite" Width="230" Height="260" Opacity="0" IsHitTestVisible="False"
                        RenderOptions.BitmapScalingMode="HighQuality"/>
+
+                <!-- How many items are due today (including overdue), by the head; hidden at 0 -->
+                <Border x:Name="Badge" Canvas.Left="158" Canvas.Top="46" MinWidth="24" Height="24" CornerRadius="12" Padding="6,0"
+                        BorderBrush="White" BorderThickness="2" Visibility="Collapsed">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#A88CF5" Offset="0"/>
+                            <GradientStop Color="#7E5FDB" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.Effect>
+                        <DropShadowEffect Color="#5B44B8" BlurRadius="8" ShadowDepth="1" Opacity="0.35"/>
+                    </Border.Effect>
+                    <TextBlock x:Name="BadgeText" Foreground="White" FontSize="12" FontWeight="Bold"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
             </Canvas>
         </Canvas>
     </Grid>

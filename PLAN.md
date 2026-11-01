@@ -3,14 +3,14 @@
 A Clippy-style animated desktop assistant for Windows that acts as a personal assistant for support-maintenance work:
 emails, reminders and a checklist, recent files, fast file search, and (planned) meeting reminders.
 
-## Status (as of 2026-11-01)
+## Status (as of 2026-11-01, updated the same evening)
 | Area | Status |
 |---|---|
 | Character (3D "Soft Satin" look), onboarding, greetings, moods | ✅ Built |
-| Left-click action list, right-click menu, drag, status peek on hover | ✅ Built |
+| Left-click action list, right-click menu, drag, status peek, remembered position, size setting, count badge | ✅ Built |
 | Feature 1: unread and unreplied emails | ✅ Built, ⚠️ not working yet: classic Outlook has no email account set up |
 | Feature 2: calendar and Teams meetings | ⏳ Not started (needs classic Outlook, or another source, see Feature 2) |
-| Feature 3: reminders and checklist | ✅ Core built; smart delivery, sub-tasks, tags, daily routine still planned |
+| Feature 3: reminders and checklist | ✅ Built, incl. editing, Completed, grouped missed reminders, more snooze options; smart delivery, sub-tasks, tags, daily routine still planned |
 | Feature 4: recent files | ✅ Built |
 | Feature 5: file search (Ctrl + Alt + F) | ✅ Built |
 | Single instance, app icon, crash log | ✅ Built |
@@ -61,7 +61,7 @@ emails, reminders and a checklist, recent files, fast file search, and (planned)
 - Expressions and animations (built): neutral, blink (every 3–6 s), happy `^ ^`, curious (head tilt), surprised (wide eyes),
   sleepy (after 1 minute idle), wave (4 frames), celebrate spin (12 frames). Expressions crossfade; hover bob, hop with squash
   and stretch, and sparkles are done in WPF.
-- Planned: Pointing, Stretch, seasonal outfits, "remembers its position", hides at the screen edge.
+- Planned: Pointing, Stretch, seasonal outfits, hides at the screen edge.
 
 ### Interaction (built)
 - **Left click:** "What would you like to do, {Name}?" with **Add reminder, Checklist, Recent files, Check emails, Search files**.
@@ -72,6 +72,10 @@ emails, reminders and a checklist, recent files, fast file search, and (planned)
   shows for 5 seconds:
   "{Name}, you have 2 reminders and 1 checklist item open (1 overdue)." / "Next: Honda car maintenance" / "11 Nov · 9:00 AM".
   It never covers typing, a due reminder or an open bubble.
+- **Remembers its position:** where you last dragged it (saved in `settings.json`), back to the corner if that spot is no longer on a screen.
+- **Size:** right click → Size → Small (80%), Medium, Large (125%). Scales the whole bot and bubble, keeping its bottom-right corner in place.
+- **Count badge:** a small purple number by the head for open items due today (overdue included), hidden at 0. Planned: the next meeting
+  in the status peek once the calendar (Feature 2) exists.
 - **Hotkeys:** `Ctrl + Alt + R` quick capture, `Ctrl + Alt + F` file search.
 - **Single instance:** starting `SMBot.exe` again doesn't add a bot. The running one comes forward (back on screen if needed) and shows
   its action list. `SMBot.exe --checklist` opens the checklist (in the running bot if there is one).
@@ -136,15 +140,24 @@ Built:
 - Quick capture: left click → **Add reminder**, or `Ctrl + Alt + R` from anywhere (`Win + Shift + R` is taken by the Snipping Tool recorder on Windows 11).
 - A local rule-based parser (no AI) in English and Malay. It splits several items ("A, B and C"; items without a time share the time
   of the last item that has one) and understands days (today, tomorrow/esok, lusa, next week, Monday/Isnin, 15/11), times (3pm, 9.30am,
-  15:00, pukul 3 petang, after lunch/lepas lunch, end of day, malam ni, in 30 minutes), repeats (every day, every weekday,
-  every Friday/setiap Jumaat, every month end) and `!` for high priority. Tested on 15 English and Malay sentences.
+  15:00, pukul 3 petang, noon, after lunch/lepas lunch, end of day, malam ni, in 30 minutes), month names in English and Malay
+  (15 Disember, Dec 15, 3rd of March 2027), repeats (every day, every weekday, every Friday/setiap Jumaat, every 2 weeks/fortnightly/
+  setiap 2 minggu, every month on the 15th/every 25th/setiap 5 haribulan, every month end) and `!` for high priority.
+  Tested on 22 English and Malay sentences; every one reads back exactly from its edit text.
 - A confirmation step in the bubble shows what was understood before saving (Edit / Save).
-- Due reminders: the bot waves, hops and says "{Name}, time to {task}!" with **✓ Done / 10 min / 1 hour**. Ignored ones pop up again
-  after 10 minutes. Ticking a repeating reminder moves it to its next date.
+- Due reminders: the bot waves, hops and says "{Name}, time to {task}!" with **10 min / 1 hour / Later… / ✓ Done**.
+  **Later…** offers After lunch (2 PM, or tomorrow if lunch is over), Tomorrow morning (9 AM), or a typed time ("4pm", "tomorrow 10am").
+  Ignored ones pop up again after 10 minutes. Ticking a repeating reminder moves it to its next date.
+- **Missed reminders are grouped:** when 2 or more went off over 10 minutes ago (PC off, or away), one list says
+  "{Name}, you missed 3 reminders while you were away:" with a ✓ for each (up to 4 shown) and **Snooze 1h / Checklist / ✓ All done**.
 - "Reminder" = has a time (alerts); "checklist item" = no time (sits under Anytime, no alert).
 - **Checklist window** (white fading to light purple, light title bar, SMBot head in the header): sections Overdue / Today / Tomorrow /
   Upcoming / Anytime with count pills, white rounded task cards, round purple tick boxes, delete, today's progress bar, and an add box
   (adds straight away, no confirmation step).
+  - **Edit:** click a task's text to change what it says and when (natural language, pre-filled, e.g. "every Friday 9:00am";
+    empty = anytime; start with `!` for important). Unclear times get a friendly error instead of saving.
+  - **Completed:** items done on earlier days (last 30 days) in a collapsible section showing "done 30 Oct", with **Clear all**.
+    Today's stay ticked under Today; unticking brings one back.
 
 Planned: calendar-relative times ("after my 10am meeting"), smart delivery (wait until a meeting ends, "when I'm free"),
 reminders getting more insistent (bubble → bounce → toast), sub-tasks, tags (`#project`), links to emails or files,

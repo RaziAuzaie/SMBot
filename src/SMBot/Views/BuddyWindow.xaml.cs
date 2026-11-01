@@ -47,12 +47,13 @@ public partial class BuddyWindow : Window
 
     // Typing in the bubble, or a reminder waiting for an answer: don't cover it with something else
     bool IsBusy => NamePanel.Visibility == Visibility.Visible || CapturePanel.Visibility == Visibility.Visible
-                   || ConfirmPanel.Visibility == Visibility.Visible || DuePanel.Visibility == Visibility.Visible;
+                   || ConfirmPanel.Visibility == Visibility.Visible || DuePanel.Visibility == Visibility.Visible
+                   || MissedPanel.Visibility == Visibility.Visible;
 
     public BuddyWindow()
     {
         InitializeComponent();
-        _reminderTimer.Tick += (_, _) => CheckDueReminders();
+        _reminderTimer.Tick += (_, _) => { CheckDueReminders(); UpdateBadge(); };
         _peekTimer.Tick += (_, _) => PeekStatus(auto: true);
         _hoverTimer.Tick += (_, _) => { _hoverTimer.Stop(); PeekStatus(auto: false); };
         SourceInitialized += (_, _) => RegisterCaptureHotkey();
@@ -68,10 +69,10 @@ public partial class BuddyWindow : Window
 
     void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        // Bottom-right corner of the screen, above the taskbar
-        var area = SystemParameters.WorkArea;
-        Left = area.Right - Width - 16;
-        Top = area.Bottom - Height - 8;
+        ApplySize(_settings.BotSize, keepAnchor: false);
+        PlaceWindow();
+        UpdateBadge();
+        ReminderService.Changed += UpdateBadge;
 
         Play("Hover");
         _blinkTimer.Start();
@@ -361,10 +362,19 @@ public partial class BuddyWindow : Window
     {
         if (IsBusy) return;
         // A reminder that was ignored pops up again after 10 minutes
-        var due = ReminderService.DueNow()
-            .FirstOrDefault(r => !_lastAlert.TryGetValue(r.Id, out var last) || DateTime.Now - last > TimeSpan.FromMinutes(10));
-        if (due is null) return;
+        var pending = ReminderService.DueNow()
+            .Where(r => !_lastAlert.TryGetValue(r.Id, out var last) || DateTime.Now - last > TimeSpan.FromMinutes(10)).ToList();
+        if (pending.Count == 0) return;
 
+        // Several that went off a while ago (PC was off, or away): one list instead of a pop-up each
+        var missed = pending.Where(r => DateTime.Now - r.Due > TimeSpan.FromMinutes(10)).ToList();
+        if (missed.Count >= 2)
+        {
+            ShowMissed(missed);
+            return;
+        }
+
+        var due = pending[0];
         _lastAlert[due.Id] = DateTime.Now;
         _dueReminder = due;
         var text = due.Text.Length > 1 && char.IsLower(due.Text[1]) ? char.ToLower(due.Text[0]) + due.Text[1..] : due.Text;
@@ -372,6 +382,64 @@ public partial class BuddyWindow : Window
         DuePanel.Visibility = Visibility.Visible;
         Wave();
         AlertMoment();
+    }
+
+    // ---- Missed reminders ----
+
+    List<Reminder> _missed = [];
+
+    void ShowMissed(List<Reminder> missed)
+    {
+        _missed = missed;
+        foreach (var r in missed) _lastAlert[r.Id] = DateTime.Now;
+        Say($"{_settings.UserName}, you missed {missed.Count} reminders while you were away:");
+        RefreshMissed();
+        MissedPanel.Visibility = Visibility.Visible;
+        AlertMoment();
+    }
+
+    void RefreshMissed()
+    {
+        if (_missed.Count == 0)
+        {
+            Say($"All caught up, {_settings.UserName}! ✓");
+            Sparkle();
+            HappyMoment();
+            return;
+        }
+        MissedList.ItemsSource = _missed.Take(4).ToList();
+        MissedMore.Text = $"+ {_missed.Count - 4} more in your checklist";
+        MissedMore.Visibility = _missed.Count > 4 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    void MissedDone_Click(object sender, RoutedEventArgs e)
+    {
+        var r = (Reminder)((FrameworkElement)sender).DataContext;
+        ReminderService.Complete(r);
+        _lastAlert.Remove(r.Id);
+        _missed.Remove(r);
+        RefreshMissed();
+    }
+
+    void MissedAllDone_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var r in _missed) { ReminderService.Complete(r); _lastAlert.Remove(r.Id); }
+        _missed.Clear();
+        RefreshMissed();
+    }
+
+    void MissedSnoozeAll_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var r in _missed) { ReminderService.Snooze(r, TimeSpan.FromHours(1)); _lastAlert.Remove(r.Id); }
+        Say($"Okay, I'll remind you about them again at {DateTime.Now.AddHours(1):h:mm tt}.");
+        _missed.Clear();
+        SetMood(Mood.Neutral);
+    }
+
+    void MissedChecklist_Click(object sender, RoutedEventArgs e)
+    {
+        HideBubble();
+        OpenChecklist();
     }
 
     void ReminderDone_Click(object sender, RoutedEventArgs e)
@@ -385,16 +453,54 @@ public partial class BuddyWindow : Window
         HappyMoment();
     }
 
-    void Snooze10_Click(object sender, RoutedEventArgs e) => Snooze(TimeSpan.FromMinutes(10));
+    void Snooze10_Click(object sender, RoutedEventArgs e) => SnoozeTo(DateTime.Now.AddMinutes(10));
 
-    void Snooze60_Click(object sender, RoutedEventArgs e) => Snooze(TimeSpan.FromHours(1));
+    void Snooze60_Click(object sender, RoutedEventArgs e) => SnoozeTo(DateTime.Now.AddHours(1));
 
-    void Snooze(TimeSpan by)
+    void SnoozeMore_Click(object sender, RoutedEventArgs e)
+    {
+        SnoozeMorePanel.Visibility = SnoozeMorePanel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+        SnoozeError.Visibility = Visibility.Collapsed;
+        SnoozeBox.Text = "";
+        if (SnoozeMorePanel.Visibility == Visibility.Visible) { Activate(); SnoozeBox.Focus(); }
+    }
+
+    // 2 PM today, or tomorrow if lunch is already over
+    void SnoozeLunch_Click(object sender, RoutedEventArgs e) =>
+        SnoozeTo(DateTime.Today.AddHours(DateTime.Now.TimeOfDay < new TimeSpan(13, 30, 0) ? 14 : 24 + 14));
+
+    void SnoozeMorning_Click(object sender, RoutedEventArgs e) => SnoozeTo(DateTime.Today.AddDays(1).AddHours(9));
+
+    void SnoozeCustom_Click(object sender, RoutedEventArgs e) => SnoozeCustom();
+
+    void SnoozeBox_TextChanged(object sender, TextChangedEventArgs e) =>
+        SnoozeHint.Visibility = SnoozeBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    void SnoozeBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) SnoozeCustom();
+    }
+
+    // Any time the reminder parser understands: "4pm", "tomorrow 10am", "Friday 9am", "15 Dis 2pm"
+    void SnoozeCustom()
+    {
+        var (due, _, leftover) = ReminderParser.ParseWhen(SnoozeBox.Text, DateTime.Now);
+        if (due is not { } when || leftover.Length > 0 || when <= DateTime.Now)
+        {
+            SnoozeError.Text = "I didn't get that time. Try \"4pm\" or \"tomorrow 10am\".";
+            SnoozeError.Visibility = Visibility.Visible;
+            return;
+        }
+        SnoozeTo(when);
+    }
+
+    void SnoozeTo(DateTime when)
     {
         if (_dueReminder is null) return;
-        ReminderService.Snooze(_dueReminder, by);
+        ReminderService.SnoozeUntil(_dueReminder, when);
         _lastAlert.Remove(_dueReminder.Id);
-        Say($"Okay, I'll remind you again at {_dueReminder.Due:h:mm tt}.");
+        var day = when.Date == DateTime.Today ? "" : when.Date == DateTime.Today.AddDays(1) ? "tomorrow " : $"on {when:ddd d MMM} ";
+        Say($"Okay, I'll remind you again {day}at {when:h:mm tt}.");
         _dueReminder = null;
         SetMood(Mood.Neutral);
     }
@@ -515,6 +621,7 @@ public partial class BuddyWindow : Window
         // Barely moved (a click with a little hand wobble), so it was a click: open the action list,
         // or close it if it's already open (never hide onboarding)
         var clicked = Math.Abs(Left - left) < 5 && Math.Abs(Top - top) < 5;
+        if (!clicked) SavePosition();
         if (clicked && NamePanel.Visibility != Visibility.Visible)
         {
             if (Bubble.Visibility == Visibility.Visible && ActionPanel.Visibility == Visibility.Visible)
@@ -538,17 +645,87 @@ public partial class BuddyWindow : Window
     // Someone started SMBot.exe again: come back into view and offer the action list instead of a second bot
     public void BringForward()
     {
-        var area = SystemParameters.WorkArea;
-        if (Left + Width / 2 < area.Left || Left + Width / 2 > area.Right || Top + Height / 2 < area.Top || Top + Height / 2 > area.Bottom)
+        if (!OnScreen(Left, Top))
         {
-            Left = area.Right - Width - 16;
-            Top = area.Bottom - Height - 8;
+            MoveToCorner();
+            SavePosition();
         }
         Activate();
         if (!IsBusy) ShowActions();
     }
 
     public void OpenChecklist() => Checklist_Click(this, new RoutedEventArgs());
+
+    // ---- Position and size ----
+
+    const double BaseWidth = 500, BaseHeight = 340;
+
+    // Where it was last dragged to, if that's still on a screen (a monitor may have been unplugged); otherwise the corner
+    void PlaceWindow()
+    {
+        if (_settings.BotLeft is { } left && _settings.BotTop is { } top && OnScreen(left, top))
+            (Left, Top) = (left, top);
+        else
+            MoveToCorner();
+    }
+
+    void MoveToCorner()
+    {
+        var area = SystemParameters.WorkArea;   // bottom-right of the main screen, above the taskbar
+        Left = area.Right - Width - 16;
+        Top = area.Bottom - Height - 8;
+    }
+
+    // The bot itself (right-hand part of the window) must be on the desktop, across all monitors
+    bool OnScreen(double left, double top)
+    {
+        var (x, y) = (left + Width - 115 * SizeScale.ScaleX, top + Height - 130 * SizeScale.ScaleY);
+        return x >= SystemParameters.VirtualScreenLeft && x <= SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth
+            && y >= SystemParameters.VirtualScreenTop && y <= SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight;
+    }
+
+    void SavePosition()
+    {
+        (_settings.BotLeft, _settings.BotTop) = (Left, Top);
+        SettingsService.Save(_settings);
+    }
+
+    // Small / Medium / Large scale the whole window, bubble included. keepAnchor keeps the bot's bottom-right corner in place.
+    void ApplySize(string size, bool keepAnchor)
+    {
+        var scale = size switch { "small" => 0.8, "large" => 1.25, _ => 1.0 };
+        var (oldWidth, oldHeight) = (Width, Height);
+        SizeScale.ScaleX = SizeScale.ScaleY = scale;
+        Width = BaseWidth * scale;
+        Height = BaseHeight * scale;
+        if (keepAnchor)
+        {
+            Left += oldWidth - Width;
+            Top += oldHeight - Height;
+        }
+        SizeSmall.IsChecked = size == "small";
+        SizeMedium.IsChecked = size is not ("small" or "large");
+        SizeLarge.IsChecked = size == "large";
+    }
+
+    void Size_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.BotSize = (string)((MenuItem)sender).Tag;
+        ApplySize(_settings.BotSize, keepAnchor: true);
+        if (!OnScreen(Left, Top)) MoveToCorner();
+        SavePosition();
+    }
+
+    // ---- Count badge ----
+
+    // Open items due today, overdue ones included
+    void UpdateBadge()
+    {
+        var count = ReminderService.All.Count(r => !r.IsDone && r.Due < DateTime.Today.AddDays(1));
+        Badge.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        BadgeText.Text = count > 9 ? "9+" : count.ToString();
+        Badge.ToolTip = count == 1 ? "1 item due today" : $"{count} items due today";
+    }
 
     void ActionAddReminder_Click(object sender, RoutedEventArgs e) => StartCapture();
 
@@ -718,6 +895,8 @@ public partial class BuddyWindow : Window
         CapturePanel.Visibility = Visibility.Collapsed;
         ConfirmPanel.Visibility = Visibility.Collapsed;
         DuePanel.Visibility = Visibility.Collapsed;
+        SnoozeMorePanel.Visibility = Visibility.Collapsed;
+        MissedPanel.Visibility = Visibility.Collapsed;
         RecentList.Visibility = Visibility.Collapsed;
         ActionPanel.Visibility = Visibility.Collapsed;
         Bubble.Visibility = Visibility.Visible;
@@ -730,6 +909,8 @@ public partial class BuddyWindow : Window
         CapturePanel.Visibility = Visibility.Collapsed;
         ConfirmPanel.Visibility = Visibility.Collapsed;
         DuePanel.Visibility = Visibility.Collapsed;
+        SnoozeMorePanel.Visibility = Visibility.Collapsed;
+        MissedPanel.Visibility = Visibility.Collapsed;
         RecentList.Visibility = Visibility.Collapsed;
         ActionPanel.Visibility = Visibility.Collapsed;
         SetMood(Mood.Neutral);

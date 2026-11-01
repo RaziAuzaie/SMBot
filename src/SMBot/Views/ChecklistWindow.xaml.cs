@@ -46,6 +46,7 @@ public partial class ChecklistWindow : Window
         AddSection("Tomorrow", tomorrow, TextBrush);
         AddSection("Upcoming", upcoming, TextBrush);
         AddSection("Anytime", anytime, TextBrush);
+        AddCompletedSection(ReminderService.Completed().Where(r => r.DoneAt!.Value.Date < today).ToList());
         if (Sections.Children.Count == 0)
             Sections.Children.Add(new TextBlock
             {
@@ -54,26 +55,120 @@ public partial class ChecklistWindow : Window
             });
     }
 
+    // ---- Completed (earlier days; today's stay ticked under Today) ----
+
+    bool _showCompleted;
+
+    void AddCompletedSection(List<Reminder> done)
+    {
+        if (done.Count == 0) return;
+        var toggle = new Button
+        {
+            Cursor = Cursors.Hand, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Children =
+                {
+                    new TextBlock { Text = _showCompleted ? "" : "", FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+                                    FontSize = 10, Foreground = MutedBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) },
+                    new TextBlock { Text = "Completed", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = MutedBrush },
+                    Pill(done.Count),
+                },
+            },
+        };
+        toggle.Click += (_, _) => { _showCompleted = !_showCompleted; Refresh(); };
+
+        var clear = new Button
+        {
+            Content = "Clear all", Cursor = Cursors.Hand, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Foreground = AccentBrush, FontSize = 12, Visibility = _showCompleted ? Visibility.Visible : Visibility.Collapsed,
+        };
+        clear.Click += (_, _) =>
+        {
+            if (MessageBox.Show(this, $"Delete all {done.Count + ReminderService.Completed().Count(r => r.DoneAt!.Value.Date == DateTime.Today)} completed items?",
+                                "SMBot checklist", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                ReminderService.ClearCompleted();
+        };
+
+        var header = new DockPanel { Margin = new Thickness(2, 18, 0, 4) };
+        DockPanel.SetDock(clear, Dock.Right);
+        header.Children.Add(clear);
+        header.Children.Add(toggle);
+        Sections.Children.Add(header);
+        if (_showCompleted)
+            foreach (var r in done) Sections.Children.Add(Row(r));
+    }
+
+    Border Pill(int count) => new()
+    {
+        Background = new SolidColorBrush(Color.FromRgb(0xEE, 0xE7, 0xFF)), CornerRadius = new CornerRadius(8),
+        Padding = new Thickness(7, 0, 7, 1), Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+        Child = new TextBlock { Text = count.ToString(), FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = AccentBrush },
+    };
+
     // Section title with a small count pill, e.g. "Upcoming (1)"
     void AddSection(string title, List<Reminder> items, Brush titleBrush)
     {
         if (items.Count == 0) return;
-        var count = new Border
-        {
-            Background = new SolidColorBrush(Color.FromRgb(0xEE, 0xE7, 0xFF)), CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(7, 0, 7, 1), Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
-            Child = new TextBlock { Text = items.Count.ToString(), FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = AccentBrush },
-        };
         Sections.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal, Margin = new Thickness(2, 14, 0, 4),
-            Children = { new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = titleBrush }, count },
+            Children = { new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = titleBrush }, Pill(items.Count) },
         });
         foreach (var r in items) Sections.Children.Add(Row(r));
     }
 
+    // ---- Editing: click a task's text to change what it says and when ----
+
+    Guid? _editingId;
+
+    UIElement EditRow(Reminder r)
+    {
+        var textBox = new TextBox { Text = (r.High ? "! " : "") + r.Text, FontSize = 13.5, Foreground = TextBrush, Padding = new Thickness(6, 4, 6, 4),
+                                    BorderBrush = new SolidColorBrush(Color.FromRgb(0xC9, 0xB8, 0xF5)) };
+        var whenBox = new TextBox { Text = r.WhenForEditing, FontSize = 12.5, Foreground = TextBrush, Padding = new Thickness(6, 4, 6, 4),
+                                    BorderBrush = new SolidColorBrush(Color.FromRgb(0xC9, 0xB8, 0xF5)), Margin = new Thickness(0, 6, 0, 0) };
+        var hint = new TextBlock { Text = "When: e.g. tomorrow 3pm, 15 Dis 10am, every Friday 9am. Leave empty for anytime. Start with ! for important.",
+                                   FontSize = 11, Foreground = MutedBrush, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 0, 0) };
+        var error = new TextBlock { FontSize = 11.5, Foreground = OverdueBrush, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed,
+                                    Margin = new Thickness(2, 4, 0, 0) };
+
+        void Save()
+        {
+            var text = textBox.Text.Trim();
+            var high = text.StartsWith('!');
+            text = text.TrimStart('!', ' ');
+            var (due, repeat, leftover) = ReminderParser.ParseWhen(whenBox.Text, DateTime.Now);
+            if (text.Length == 0) { Show("Type what the task is."); return; }
+            if (leftover.Length > 0) { Show($"I didn't understand \"{leftover}\". Try something like \"tomorrow 3pm\"."); return; }
+            _editingId = null;
+            ReminderService.Update(r, text, due, repeat, high);   // saving refreshes the list
+        }
+        void Show(string message) { error.Text = message; error.Visibility = Visibility.Visible; }
+        void Cancel() { _editingId = null; Refresh(); }
+        void Keys(object s, KeyEventArgs e) { if (e.Key == Key.Enter) Save(); else if (e.Key == Key.Escape) Cancel(); }
+        textBox.KeyDown += Keys;
+        whenBox.KeyDown += Keys;
+
+        var cancel = new Button { Content = "Cancel", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 6, 0), Cursor = Cursors.Hand,
+                                  Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(0xD9, 0xCC, 0xFA)), Foreground = TextBrush };
+        cancel.Click += (_, _) => Cancel();
+        var save = new Button { Content = "Save", Style = (Style)FindResource("PurpleButton"), Height = 28 };
+        save.Click += (_, _) => Save();
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0),
+                                       Children = { cancel, save } };
+        Dispatcher.BeginInvoke(() => { textBox.Focus(); textBox.CaretIndex = textBox.Text.Length; });
+        return new Border { Style = (Style)FindResource("TaskCard"), BorderBrush = new SolidColorBrush(Color.FromRgb(0xB9, 0xA6, 0xF2)),
+                            Child = new StackPanel { Children = { textBox, whenBox, hint, error, buttons } } };
+    }
+
     UIElement Row(Reminder r)
     {
+        if (r.Id == _editingId) return EditRow(r);
+
         var check = new CheckBox
         {
             IsChecked = r.IsDone, Style = (Style)FindResource("RoundCheck"),
@@ -91,8 +186,15 @@ public partial class ChecklistWindow : Window
             text.TextDecorations = TextDecorations.Strikethrough;
             text.Foreground = MutedBrush;
         }
-        var when = new TextBlock { Text = r.IsDone ? "done" : r.When, FontSize = 11.5, Foreground = MutedBrush, Margin = new Thickness(0, 2, 0, 0) };
-        var info = new StackPanel { Children = { text, when } };
+        var doneWhen = r.DoneAt is { } d ? (d.Date == DateTime.Today ? "done" : $"done {d:d MMM}") : "";
+        var when = new TextBlock { Text = r.IsDone ? doneWhen : r.When, FontSize = 11.5, Foreground = MutedBrush, Margin = new Thickness(0, 2, 0, 0) };
+        var info = new StackPanel { Children = { text, when }, Background = Brushes.Transparent };
+        if (!r.IsDone)
+        {
+            info.Cursor = Cursors.IBeam;
+            info.ToolTip = "Click to edit";
+            info.MouseLeftButtonUp += (_, _) => { _editingId = r.Id; Refresh(); };
+        }
 
         var delete = new Button { Style = (Style)FindResource("DeleteButton"), VerticalAlignment = VerticalAlignment.Top };
         delete.Click += (_, _) => ReminderService.Delete(r);

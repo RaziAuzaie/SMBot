@@ -17,6 +17,17 @@ public static class ReminderParser
     };
     static readonly string Day = "(" + string.Join("|", Days.Keys) + ")";
 
+    // English and Malay month names and short forms
+    static readonly (string Pattern, int Month)[] MonthNames =
+    [
+        ("january|januari|jan", 1), ("february|februari|feb", 2), ("march|mac|mar", 3), ("april|apr", 4), ("may|mei", 5),
+        ("june|jun", 6), ("july|julai|jul", 7), ("august|ogos|aug|ogo", 8), ("september|sept|sep", 9),
+        ("october|oktober|okt|oct", 10), ("november|nov", 11), ("december|disember|dis|dec", 12),
+    ];
+    static readonly string Month = "(" + string.Join("|", MonthNames.Select(m => m.Pattern)) + ")";
+    static int MonthNumber(string name) => MonthNames.First(m => Regex.IsMatch(name, $"^({m.Pattern})$", Opts)).Month;
+    const string Ordinal = @"(?:st|nd|rd|th|hb| haribulan)?";
+
     static readonly Regex Prefix = new(@"^\s*(please\s+)?(remind me( to| that| about)?|tolong ingatkan( saya)?( untuk)?|ingatkan saya( untuk)?|reminder:?|todo:?)\s+", Opts);
     static readonly Regex Splitter = new(@"\s*(?:,|;|\n|\band then\b|\bthen\b|\band\b|\bdan\b|\blepas tu\b)\s*", Opts);
 
@@ -62,9 +73,19 @@ public static class ReminderParser
         Match m;
 
         // ---- Repeats ----
+        int monthDay = 0;
         if (Take(ref s, @"\b(every weekday|weekdays|setiap hari bekerja)\b").Success) repeat = "weekdays";
         else if (Take(ref s, @"\b(every ?day|daily|setiap hari|tiap hari|hari-hari)\b").Success) repeat = "daily";
+        else if (Take(ref s, @"\b((every|each) (2|two|other) weeks?|fortnightly|bi-?weekly|(setiap|tiap) (2|dua) minggu)\b").Success) repeat = "biweekly";
         else if (Take(ref s, @"\b((every|each|setiap|tiap) (month ?end|end of (the )?month|hujung bulan)|end of every month)\b").Success) repeat = "monthend";
+        // A day of the month: "every month on the 15th", "monthly on 15", "every 15th", "the 15th of every month", "setiap 15 haribulan"
+        else if ((m = Take(ref s, $@"\b(?:(?:every|each) month|monthly|(?:setiap|tiap) bulan)(?: on| pada)?(?: the)? (\d{{1,2}}){Ordinal}(?![\d:./])")).Success
+              || (m = Take(ref s, @"\b(?:every|each|setiap|tiap) (\d{1,2})(?:st|nd|rd|th|hb| haribulan)\b")).Success
+              || (m = Take(ref s, @"\b(?:on )?the (\d{1,2})(?:st|nd|rd|th) of (?:every|each) month\b")).Success)
+        {
+            monthDay = Math.Clamp(int.Parse(m.Groups[1].Value), 1, 31);
+            repeat = "monthday:" + monthDay;
+        }
         else if (Take(ref s, @"\b((every|each|setiap|tiap) (month|bulan)|monthly)\b").Success) repeat = "monthly";
         else if ((m = Take(ref s, $@"\b(every|each|setiap|tiap) (hari )?{Day}\b")).Success)
         {
@@ -120,7 +141,14 @@ public static class ReminderParser
             try { date = new DateTime(year, int.Parse(m.Groups[2].Value), int.Parse(m.Groups[1].Value)); } catch { }
             if (date < now.Date && !m.Groups[3].Success) date = date.Value.AddYears(1);
         }
+        // Month names: "15 Disember", "15th of December 2026", "Dec 15", "December 15, 2026"
+        else if ((m = Take(ref s, $@"\b(\d{{1,2}}){Ordinal}\s+(?:of\s+)?{Month}(?:,?\s+(\d{{4}}))?\b")).Success)
+            date = MonthDate(int.Parse(m.Groups[1].Value), MonthNumber(m.Groups[2].Value), m.Groups[3], now);
+        else if ((m = Take(ref s, $@"\b{Month}\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(\d{{4}}))?\b")).Success)
+            date = MonthDate(int.Parse(m.Groups[2].Value), MonthNumber(m.Groups[1].Value), m.Groups[3], now);
+
         if (repeat == "monthend" && date is null) date = ReminderService.MonthEnd(now);
+        if (monthDay > 0 && date is null) date = ReminderService.DayOfMonth(now, monthDay);
 
         // ---- Combine ----
         DateTime? due = exact;
@@ -142,6 +170,26 @@ public static class ReminderParser
 
         var reminder = new Reminder { Text = Tidy(s), Due = due, Repeat = repeat, High = high };
         return (reminder, hasTiming);
+    }
+
+    // Reads just a "when", for editing a reminder or picking a snooze time: "tomorrow 3pm", "every Friday 9am", "15 Dis".
+    // Leftover is whatever wasn't understood (empty when it all made sense).
+    public static (DateTime? Due, string? Repeat, string Leftover) ParseWhen(string when, DateTime now)
+    {
+        if (string.IsNullOrWhiteSpace(when)) return (null, null, "");
+        var (r, _) = ParseOne(when, now);
+        return (r.Due, r.Repeat, r.Text);
+    }
+
+    // A date with no year means the next time that date comes round
+    static DateTime? MonthDate(int day, int month, Group year, DateTime now)
+    {
+        try
+        {
+            var date = new DateTime(year.Success ? int.Parse(year.Value) : now.Year, month, day);
+            return date < now.Date && !year.Success ? date.AddYears(1) : date;
+        }
+        catch (ArgumentOutOfRangeException) { return null; }   // e.g. 31 Feb
     }
 
     // Removes the first match from s and returns it
