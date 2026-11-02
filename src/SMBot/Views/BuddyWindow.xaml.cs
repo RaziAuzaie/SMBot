@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -765,6 +766,48 @@ public partial class BuddyWindow : Window
         HideBubble();
         OpenSearch();
     }
+
+    // ---- Snip screen ----
+
+    // Windows' own screen snip, the same as Win + Shift + S. The bot hides while it opens so it isn't in the picture;
+    // the snip freezes the screen as it starts, so the bot can come back straight after
+    async void ActionSnip_Click(object sender, RoutedEventArgs e)
+    {
+        HideBubble();
+        Opacity = 0;
+        await Task.Delay(200);
+        var clipboardBefore = GetClipboardSequenceNumber();
+        try
+        {
+            Process.Start(new ProcessStartInfo("ms-screenclip:") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Opacity = 1;
+            Say($"Sorry {_settings.UserName}, I couldn't open the snipping tool: {ex.Message}");
+            return;
+        }
+        await Task.Delay(1500);
+        Opacity = 1;
+
+        // Say so once the snip lands on the clipboard; give up after 2 minutes (e.g. the snip was cancelled)
+        for (var i = 0; i < 240; i++)
+        {
+            await Task.Delay(500);
+            if (GetClipboardSequenceNumber() == clipboardBefore) continue;
+            bool isImage;
+            try { isImage = Clipboard.ContainsImage(); } catch (COMException) { isImage = false; }   // clipboard busy
+            if (isImage && !IsBusy)
+            {
+                Say($"Snip copied, {_settings.UserName}! Paste it with Ctrl + V.");
+                HappyMoment();
+            }
+            return;
+        }
+    }
+
+    [DllImport("user32.dll")]
+    static extern uint GetClipboardSequenceNumber();
 
     [DllImport("user32.dll")]
     static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint key);

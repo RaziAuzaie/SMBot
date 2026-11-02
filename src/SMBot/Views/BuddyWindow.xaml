@@ -317,6 +317,7 @@
                     <Button Style="{StaticResource ActionButton}" Tag="&#xE81C;" Content="Recent files" Click="RecentFiles_Click"/>
                     <Button Style="{StaticResource ActionButton}" Tag="&#xE715;" Content="Check emails" Click="CheckEmails_Click"/>
                     <Button Style="{StaticResource ActionButton}" Tag="&#xE721;" Content="Search files" Click="ActionSearch_Click"/>
+                    <Button Style="{StaticResource ActionButton}" Tag="&#xE8C6;" Content="Snip screen" Click="ActionSnip_Click"/>
                 </StackPanel>
             </StackPanel>
         </Border>
