@@ -333,6 +333,7 @@
                         <MenuItem x:Name="SizeMedium" Header="Medium" Tag="medium" IsCheckable="True" Click="Size_Click"/>
                         <MenuItem x:Name="SizeLarge" Header="Large" Tag="large" IsCheckable="True" Click="Size_Click"/>
                     </MenuItem>
+                    <MenuItem x:Name="HeadOnlyItem" Header="Head only" IsCheckable="True" Click="HeadOnly_Click"/>
                     <Separator/>
                     <MenuItem Header="Reset onboarding" Click="Reset_Click"/>
                     <MenuItem Header="Exit" Click="Exit_Click"/>
@@ -346,7 +347,7 @@
 
             <!-- Pre-rendered 3D frames (design/smbot-sprites.html). FadeSprite holds the previous frame
                  while it fades out, so expression changes crossfade. -->
-            <Canvas Width="230" Height="260">
+            <Canvas x:Name="BotLayer" Width="230" Height="260">
                 <Canvas.RenderTransform>
                     <TransformGroup>
                         <ScaleTransform x:Name="SquashScale" CenterX="115" CenterY="252"/>
@@ -356,6 +357,8 @@
                         <ScaleTransform x:Name="DanceScale" CenterX="115" CenterY="252"/>
                         <RotateTransform x:Name="DanceTilt" CenterX="115" CenterY="252"/>
                         <TranslateTransform x:Name="DanceBob"/>
+                        <!-- Head-only mode: the head drops down to where the whole bot normally stands -->
+                        <TranslateTransform x:Name="HeadOnlyShift"/>
                     </TransformGroup>
                 </Canvas.RenderTransform>
                 <Image x:Name="Sprite" Width="230" Height="260" RenderOptions.BitmapScalingMode="HighQuality"/>

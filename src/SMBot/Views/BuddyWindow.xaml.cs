@@ -64,13 +64,13 @@ public partial class BuddyWindow : Window
         };
         _emailTimer.Tick += async (_, _) => await CheckEmailsAsync(userAsked: false);
         _blinkTimer.Tick += async (_, _) => await Blink();
-        Bubble.IsVisibleChanged += (_, _) => SetCompact(!Bubble.IsVisible);   // only the bot while the bubble is closed
         ShowFrame("neutral");
     }
 
     void Window_Loaded(object sender, RoutedEventArgs e)
     {
         ApplySize(_settings.BotSize, keepAnchor: false);
+        ApplyHeadOnly(_settings.HeadOnly);
         PlaceWindow();
         UpdateBadge();
         ReminderService.Changed += UpdateBadge;
@@ -883,23 +883,6 @@ public partial class BuddyWindow : Window
             MoveToCorner();
     }
 
-    // While the bubble is closed, the window shrinks to just the bot. A transparent window is redrawn whole on every
-    // animation frame, so this cuts the drawing work (and CPU) by about two thirds. The bot stays put: the window
-    // keeps its bottom-right corner.
-    const double CompactWidth = 230, CompactHeight = 276;
-    bool _compact;
-
-    void SetCompact(bool compact)
-    {
-        if (compact == _compact) return;
-        var s = SizeScale.ScaleX;
-        var (right, bottom) = (Left + Width, Top + Height);
-        _compact = compact;
-        Width = (compact ? CompactWidth : BaseWidth) * s;
-        Height = (compact ? CompactHeight : BaseHeight) * s;
-        (Left, Top) = (right - Width, bottom - Height);
-    }
-
     void MoveToCorner()
     {
         var area = SystemParameters.WorkArea;   // bottom-right of the main screen, above the taskbar
@@ -928,8 +911,8 @@ public partial class BuddyWindow : Window
         var scale = size switch { "small" => 0.8, "large" => 1.25, _ => 1.0 };
         var (oldWidth, oldHeight) = (Width, Height);
         SizeScale.ScaleX = SizeScale.ScaleY = scale;
-        Width = (_compact ? CompactWidth : BaseWidth) * scale;
-        Height = (_compact ? CompactHeight : BaseHeight) * scale;
+        Width = BaseWidth * scale;
+        Height = BaseHeight * scale;
         if (keepAnchor)
         {
             Left += oldWidth - Width;
@@ -946,6 +929,28 @@ public partial class BuddyWindow : Window
         ApplySize(_settings.BotSize, keepAnchor: true);
         if (!OnScreen(Left, Top)) MoveToCorner();
         SavePosition();
+    }
+
+    // ---- Head-only mode ----
+
+    // In the frames the head ends at y 133 and the body starts at y 141 (230 x 260 units), with nothing in between
+    const double HeadBottom = 137, HeadDrop = 115;
+
+    // Cut the bot off below the head and lower the head to the body's place. The clip also limits clicks to the head,
+    // so the empty space where the body was lets clicks through to the desktop
+    void ApplyHeadOnly(bool headOnly)
+    {
+        BotLayer.Clip = headOnly ? new RectangleGeometry(new Rect(0, 0, 230, HeadBottom)) : null;
+        HeadOnlyShift.Y = headOnly ? HeadDrop : 0;
+        Character.Background = headOnly ? null : Brushes.Transparent;
+        HeadOnlyItem.IsChecked = headOnly;
+    }
+
+    void HeadOnly_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.HeadOnly = HeadOnlyItem.IsChecked;
+        ApplyHeadOnly(_settings.HeadOnly);
+        SettingsService.Save(_settings);
     }
 
     // ---- Count badge ----

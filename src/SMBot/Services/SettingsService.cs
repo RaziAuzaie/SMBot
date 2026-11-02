@@ -13,6 +13,7 @@ public class Settings
     public double? BotLeft { get; set; }                        // where the bot was last dragged to (null = bottom-right corner)
     public double? BotTop { get; set; }
     public string BotSize { get; set; } = "medium";             // small, medium, large
+    public bool HeadOnly { get; set; }                           // show just the floating head, without the body
 }
 
 public static class SettingsService
