@@ -14,6 +14,7 @@ public partial class ChecklistWindow : Window
     static readonly Brush MutedBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x7D, 0xB8));
     static readonly Brush OverdueBrush = new SolidColorBrush(Color.FromRgb(0xC0, 0x39, 0x2B));
     static readonly Brush AccentBrush = new SolidColorBrush(Color.FromRgb(0x8A, 0x6F, 0xE0));
+    static readonly Brush NoteBackground = new SolidColorBrush(Color.FromRgb(0xF6, 0xF2, 0xFF));
 
     public ChecklistWindow()
     {
@@ -120,9 +121,10 @@ public partial class ChecklistWindow : Window
         foreach (var r in items) Sections.Children.Add(Row(r));
     }
 
-    // ---- Editing: click a task's text to change what it says and when ----
+    // ---- Editing: click a task's text to change what it says, when, and its notes ----
 
     Guid? _editingId;
+    bool _focusNote;   // opened from "Add note", so the cursor starts in the notes box
 
     UIElement EditRow(Reminder r)
     {
@@ -132,6 +134,13 @@ public partial class ChecklistWindow : Window
                                     BorderBrush = new SolidColorBrush(Color.FromRgb(0xC9, 0xB8, 0xF5)), Margin = new Thickness(0, 6, 0, 0) };
         var hint = new TextBlock { Text = "When: e.g. tomorrow 3pm, 15 Dis 10am, every Friday 9am. Leave empty for anytime. Start with ! for important.",
                                    FontSize = 11, Foreground = MutedBrush, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 4, 0, 0) };
+        var noteLabel = new TextBlock { Text = "Notes", FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = MutedBrush,
+                                        Margin = new Thickness(2, 10, 0, 3) };
+        var noteBox = new TextBox { Text = r.Note ?? "", FontSize = 12.5, Foreground = TextBrush, Padding = new Thickness(6, 4, 6, 4),
+                                    BorderBrush = new SolidColorBrush(Color.FromRgb(0xC9, 0xB8, 0xF5)), AcceptsReturn = true,
+                                    TextWrapping = TextWrapping.Wrap, MinHeight = 54, MaxHeight = 160,
+                                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                                    ToolTip = "Remarks for this task. Enter starts a new line; Ctrl + Enter saves." };
         var error = new TextBlock { FontSize = 11.5, Foreground = OverdueBrush, TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed,
                                     Margin = new Thickness(2, 4, 0, 0) };
 
@@ -144,13 +153,19 @@ public partial class ChecklistWindow : Window
             if (text.Length == 0) { Show("Type what the task is."); return; }
             if (leftover.Length > 0) { Show($"I didn't understand \"{leftover}\". Try something like \"tomorrow 3pm\"."); return; }
             _editingId = null;
-            ReminderService.Update(r, text, due, repeat, high);   // saving refreshes the list
+            ReminderService.Update(r, text, due, repeat, high, noteBox.Text);   // saving refreshes the list
         }
         void Show(string message) { error.Text = message; error.Visibility = Visibility.Visible; }
         void Cancel() { _editingId = null; Refresh(); }
         void Keys(object s, KeyEventArgs e) { if (e.Key == Key.Enter) Save(); else if (e.Key == Key.Escape) Cancel(); }
         textBox.KeyDown += Keys;
         whenBox.KeyDown += Keys;
+        // Notes take several lines, so plain Enter is a new line there
+        noteBox.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.Control) { e.Handled = true; Save(); }
+            else if (e.Key == Key.Escape) Cancel();
+        };
 
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 6, 0), Cursor = Cursors.Hand,
                                   Background = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(0xD9, 0xCC, 0xFA)), Foreground = TextBrush };
@@ -160,9 +175,11 @@ public partial class ChecklistWindow : Window
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0),
                                        Children = { cancel, save } };
-        Dispatcher.BeginInvoke(() => { textBox.Focus(); textBox.CaretIndex = textBox.Text.Length; });
+        var focus = _focusNote ? noteBox : textBox;
+        _focusNote = false;
+        Dispatcher.BeginInvoke(() => { focus.Focus(); focus.CaretIndex = focus.Text.Length; });
         return new Border { Style = (Style)FindResource("TaskCard"), BorderBrush = new SolidColorBrush(Color.FromRgb(0xB9, 0xA6, 0xF2)),
-                            Child = new StackPanel { Children = { textBox, whenBox, hint, error, buttons } } };
+                            Child = new StackPanel { Children = { textBox, whenBox, hint, noteLabel, noteBox, error, buttons } } };
     }
 
     UIElement Row(Reminder r)
@@ -196,16 +213,39 @@ public partial class ChecklistWindow : Window
             info.MouseLeftButtonUp += (_, _) => { _editingId = r.Id; Refresh(); };
         }
 
+        // Notes under the task: shown when there are some; open tasks without notes get an "Add note" link
+        var row = new DockPanel();
+        var card = new StackPanel { Children = { row } };
+        FrameworkElement? notes = null;
+        if (r.Note is { Length: > 0 } note)
+            notes = new Border
+            {
+                Background = NoteBackground, CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 5, 8, 6),
+                Margin = new Thickness(30, 6, 0, 0), ToolTip = r.IsDone ? null : "Click to edit the notes",
+                Child = new TextBlock { Text = note, FontSize = 12, Foreground = TextBrush, TextWrapping = TextWrapping.Wrap },
+            };
+        else if (!r.IsDone)
+            notes = new TextBlock { Text = "+ Add note", FontSize = 11.5, Foreground = AccentBrush,
+                                    Margin = new Thickness(30, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        if (notes is not null)
+        {
+            if (!r.IsDone)
+            {
+                notes.Cursor = Cursors.Hand;
+                notes.MouseLeftButtonUp += (_, _) => { _editingId = r.Id; _focusNote = true; Refresh(); };
+            }
+            card.Children.Add(notes);
+        }
+
         var delete = new Button { Style = (Style)FindResource("DeleteButton"), VerticalAlignment = VerticalAlignment.Top };
         delete.Click += (_, _) => ReminderService.Delete(r);
 
-        var row = new DockPanel();
         DockPanel.SetDock(check, Dock.Left);
         DockPanel.SetDock(delete, Dock.Right);
         row.Children.Add(check);
         row.Children.Add(delete);
         row.Children.Add(info);
-        return new Border { Style = (Style)FindResource("TaskCard"), Child = row };
+        return new Border { Style = (Style)FindResource("TaskCard"), Child = card };
     }
 
     // Light title bar that matches the window (Windows 11; ignored on older versions)

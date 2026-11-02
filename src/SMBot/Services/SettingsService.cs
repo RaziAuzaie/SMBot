@@ -8,7 +8,6 @@ namespace SMBot.Services;
 public class Settings
 {
     public string UserName { get; set; } = "";
-    public int EmailCheckSeconds { get; set; } = 60;
     public HashSet<string> DismissedEmails { get; set; } = [];   // Outlook EntryIDs marked as done
     public double? BotLeft { get; set; }                        // where the bot was last dragged to (null = bottom-right corner)
     public double? BotTop { get; set; }

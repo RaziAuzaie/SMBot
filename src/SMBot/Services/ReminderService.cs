@@ -12,6 +12,7 @@ public class Reminder
     public string? Repeat { get; set; }           // daily, weekdays, weekly:Friday, biweekly, monthly, monthday:15, monthend
     public bool High { get; set; }                // typed with "!"
     public DateTime? DoneAt { get; set; }         // set when ticked (repeating ones move to the next date instead)
+    public string? Note { get; set; }             // remarks typed under the task in the checklist
 
     [JsonIgnore] public bool IsDone => DoneAt is not null;
 
@@ -130,9 +131,10 @@ public static class ReminderService
     }
 
     // Saves changes made to a reminder in the checklist
-    public static void Update(Reminder r, string text, DateTime? due, string? repeat, bool high)
+    public static void Update(Reminder r, string text, DateTime? due, string? repeat, bool high, string? note)
     {
         (r.Text, r.Due, r.Repeat, r.High) = (text, due, repeat, high);
+        r.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
         Save();
     }
 

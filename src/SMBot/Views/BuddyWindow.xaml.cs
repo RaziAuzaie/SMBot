@@ -30,9 +30,8 @@ public partial class BuddyWindow : Window
 
     // Dozes off after a minute without interaction
     readonly DispatcherTimer _idleTimer = new() { Interval = TimeSpan.FromSeconds(60) };
-    readonly DispatcherTimer _emailTimer = new();
     List<PendingEmail> _unread = [], _unreplied = [];
-    bool _checking, _checkedOnce, _outlookWarned;
+    bool _checking;
 
     // Feature 3: reminders
     readonly DispatcherTimer _reminderTimer = new() { Interval = TimeSpan.FromSeconds(15) };
@@ -62,7 +61,6 @@ public partial class BuddyWindow : Window
             _idleTimer.Stop();
             if (NamePanel.Visibility != Visibility.Visible) SetMood(Mood.Sleepy);
         };
-        _emailTimer.Tick += async (_, _) => await CheckEmailsAsync(userAsked: false);
         _blinkTimer.Tick += async (_, _) => await Blink();
         ShowFrame("neutral");
     }
@@ -85,7 +83,6 @@ public partial class BuddyWindow : Window
         else
         {
             Greet();
-            StartEmailChecks();
             _reminderTimer.Start();
             _peekTimer.Start();
             // "SMBot.exe --checklist" also opens the checklist straight away (e.g. from a pinned shortcut)
@@ -135,64 +132,29 @@ public partial class BuddyWindow : Window
         Celebrate();
         Sparkle();
         HappyMoment();
-        StartEmailChecks();
         _reminderTimer.Start();
         _peekTimer.Start();
     }
 
     // ---- Feature 1: unread and unreplied emails ----
 
-    async void StartEmailChecks()
-    {
-        _emailTimer.Interval = TimeSpan.FromSeconds(Math.Max(15, _settings.EmailCheckSeconds));
-        _emailTimer.Start();
-        await Task.Delay(TimeSpan.FromSeconds(6));   // let the greeting finish first
-        await CheckEmailsAsync(userAsked: false);
-    }
-
-    async Task CheckEmailsAsync(bool userAsked)
+    // Only when asked ("Check emails"), never on a timer: each check starts classic Outlook in the background for a while
+    async Task CheckEmailsAsync()
     {
         if (_checking) return;
         _checking = true;
-        if (userAsked) Say("Checking your emails...");
+        Say("Checking your emails...");
         try
         {
             var found = await OutlookComMailService.CheckAsync(_settings.DismissedEmails);
-            var newUnread = found.Unread.Where(e => _unread.All(p => p.EntryId != e.EntryId)).ToList();
-            var newUnreplied = found.Unreplied.Any(e => _unreplied.All(p => p.EntryId != e.EntryId));
             _unread = found.Unread;
             _unreplied = found.Unreplied;
-            var firstCheck = !_checkedOnce;
-            _checkedOnce = true;
-            _outlookWarned = false;
-            _emailTimer.Start();   // back on after a pause, once a check works again
-
-            if (IsBusy) return;
-            if (userAsked || firstCheck)
-                ShowEmails(unreadTab: _unread.Count > 0 || _unreplied.Count == 0);
-            // After that, only pop up on its own when something new arrived
-            else if (newUnread.Count > 0)
-            {
-                ShowEmails(unreadTab: true, alert: true);
-                BubbleText.Text = newUnread.Count == 1
-                    ? $"{_settings.UserName}, new email from {newUnread[0].Sender}!"
-                    : $"{_settings.UserName}, {newUnread.Count} new emails!";
-            }
-            else if (newUnreplied)
-                ShowEmails(unreadTab: false, alert: true);
-            // Nothing new: keep an open list up to date, e.g. after reading an email in New Outlook
-            else if (Bubble.Visibility == Visibility.Visible && EmailTabs.Visibility == Visibility.Visible)
-                ShowEmails(UnreadTab.IsChecked == true, quiet: true);
+            if (!IsBusy) ShowEmails(unreadTab: _unread.Count > 0 || _unreplied.Count == 0);
         }
         catch (Exception ex)
         {
-            // Stop trying on a timer (each try can open Outlook); "Check emails" tries again
-            _emailTimer.Stop();
             var reason = ex is OutlookNotReadyException ? ex.Message : $"Something went wrong reading Outlook: {ex.Message}";
-            if (userAsked || (!_outlookWarned && !IsBusy))
-                Say($"{_settings.UserName}, I can't read your emails, so I've stopped checking. {reason} " +
-                    "Click me and choose \"Check emails\" when Outlook is ready.");
-            _outlookWarned = true;
+            if (!IsBusy) Say($"{_settings.UserName}, I can't read your emails. {reason}");
         }
         finally
         {
@@ -250,7 +212,7 @@ public partial class BuddyWindow : Window
         ShowEmails(unreadTab: false);
     }
 
-    async void CheckEmails_Click(object sender, RoutedEventArgs e) => await CheckEmailsAsync(userAsked: true);
+    async void CheckEmails_Click(object sender, RoutedEventArgs e) => await CheckEmailsAsync();
 
     // ---- Feature 3: reminders and checklist ----
 
