@@ -916,6 +916,9 @@ public partial class BuddyWindow : Window
         var scale = size switch { "small" => 0.8, "large" => 1.25, _ => 1.0 };
         var (oldWidth, oldHeight) = (Width, Height);
         SizeScale.ScaleX = SizeScale.ScaleY = scale;
+        // Keep the drawn bot as a picture: the hover bob then only moves it, instead of redrawing the frame, badge and
+        // its shadow every animation frame. Drawn at screen resolution so it stays sharp
+        BotLayer.CacheMode = new BitmapCache(scale * VisualTreeHelper.GetDpi(this).DpiScaleX);
         Width = BaseWidth * scale;
         Height = BaseHeight * scale;
         if (keepAnchor)
@@ -1000,6 +1003,11 @@ public partial class BuddyWindow : Window
             _ => "neutral",
         };
         if (!_animating && !_dancing) ShowFrame(_face, fade: true);   // while dancing, the dance poses show instead
+
+        // Asleep, the bot rests instead of bobbing: nothing moves, so it costs almost nothing while you're away
+        var hover = (Storyboard)FindResource("Hover");
+        if (mood == Mood.Sleepy) hover.Pause(this);
+        else hover.Resume(this);
     }
 
     // fade: crossfade from the current frame (used for expression changes, not for animation frames)

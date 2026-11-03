@@ -122,8 +122,9 @@
         </DataTemplate>
 
         <!-- Gentle hover bob, forever -->
-        <!-- 30 frames a second is plenty for a slow bob, and halves the redraw work of the transparent window -->
-        <Storyboard x:Key="Hover" RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="30">
+        <!-- 20 frames a second is plenty for a slow 7-pixel bob, and cuts the redraw work of the transparent window.
+             It pauses while the bot sleeps (SetMood) -->
+        <Storyboard x:Key="Hover" RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="20">
             <DoubleAnimation Storyboard.TargetName="BobTransform" Storyboard.TargetProperty="Y"
                              From="0" To="-7" Duration="0:0:1.6">
                 <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
@@ -341,9 +342,16 @@
                 </ContextMenu>
             </Canvas.ContextMenu>
 
-            <!-- Soft glow under the hovering body -->
-            <Ellipse x:Name="GlowShadow" Canvas.Left="80" Canvas.Top="252" Width="70" Height="12" Fill="#B69CFF" Opacity="0.55">
-                <Ellipse.Effect><BlurEffect Radius="10"/></Ellipse.Effect>
+            <!-- Soft glow under the hovering body. A gradient instead of a blur effect: the effect was recalculated
+                 on every animation frame -->
+            <Ellipse x:Name="GlowShadow" Canvas.Left="68" Canvas.Top="246" Width="94" Height="24" Opacity="0.55">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#FFB69CFF" Offset="0"/>
+                        <GradientStop Color="#99B69CFF" Offset="0.45"/>
+                        <GradientStop Color="#00B69CFF" Offset="1"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
             </Ellipse>
 
             <!-- Pre-rendered 3D frames (design/smbot-sprites.html). FadeSprite holds the previous frame
