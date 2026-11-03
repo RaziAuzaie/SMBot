@@ -2,6 +2,7 @@
 bin/
 obj/
 publish/
+src/SMBot/SMBot.exe
 
 # Visual Studio / editor files
 .vs/
