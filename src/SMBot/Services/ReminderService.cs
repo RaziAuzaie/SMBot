@@ -64,89 +64,99 @@ public class Reminder
     }
 }
 
-// Reminders live in %LOCALAPPDATA%\SMBot\reminders.json
+// Reminders live in reminders.json in the shared data folder (see DataFolder), used by both PCs through OneDrive.
+// So every change starts from the file as it is now and is applied by id: a tick on this PC never undoes a task
+// the other PC just added. When OneDrive brings in the other PC's changes, the list reloads by itself.
 public static class ReminderService
 {
-    static readonly string FilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SMBot", "reminders.json");
-    static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
+    static readonly string FilePath = DataFolder.PathOf("reminders.json");
+    static string _lastWritten = "";
+    static FileSystemWatcher? _watcher;
 
     public static List<Reminder> All { get; private set; } = Load();
 
     public static event Action? Changed;
 
-    static List<Reminder> Load()
-    {
-        try
-        {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<List<Reminder>>(File.ReadAllText(FilePath), Json) ?? [];
-        }
-        catch { }
-        return [];
-    }
+    static List<Reminder> Load() => DataFolder.Read<List<Reminder>>(FilePath) ?? [];
 
-    public static void Save()
+    static void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(All, Json));
+        Directory.CreateDirectory(DataFolder.Path);
+        _lastWritten = JsonSerializer.Serialize(All, DataFolder.Json);
+        File.WriteAllText(FilePath, _lastWritten);
         Changed?.Invoke();
     }
 
-    public static void Add(IEnumerable<Reminder> reminders)
+    static void Change(Action<List<Reminder>> change)
     {
-        All.AddRange(reminders);
+        All = Load();
+        change(All);
         Save();
     }
 
-    public static void Delete(Reminder r)
+    static void Change(Reminder r, Action<Reminder> change) =>
+        Change(all => { if (all.Find(x => x.Id == r.Id) is { } current) change(current); });
+
+    // Reload when the file changes on disk without this PC writing it (OneDrive syncing the other PC's changes)
+    public static void WatchForOtherPc()
     {
-        All.Remove(r);
-        Save();
+        Directory.CreateDirectory(DataFolder.Path);
+        _watcher = new FileSystemWatcher(DataFolder.Path, "reminders.json")
+        {
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+        };
+        _watcher.Changed += OnFileChanged;
+        _watcher.Created += OnFileChanged;
+        _watcher.Renamed += OnFileChanged;
+        _watcher.EnableRaisingEvents = true;
     }
+
+    static void OnFileChanged(object sender, FileSystemEventArgs e) =>
+        System.Windows.Application.Current?.Dispatcher.InvokeAsync(ReloadFromDisk);
+
+    static async void ReloadFromDisk()
+    {
+        await Task.Delay(500);   // OneDrive may still be writing
+        string text;
+        try { text = File.ReadAllText(FilePath); } catch (IOException) { return; }
+        if (text == _lastWritten) return;
+        _lastWritten = text;
+        All = Load();
+        Changed?.Invoke();
+    }
+
+    public static void Add(IEnumerable<Reminder> reminders) => Change(all => all.AddRange(reminders));
+
+    public static void Delete(Reminder r) => Change(all => all.RemoveAll(x => x.Id == r.Id));
 
     // Repeating reminders move on to their next date; others are ticked off
-    public static void Complete(Reminder r)
+    public static void Complete(Reminder r) => Change(r, x =>
     {
-        if (r.Repeat is not null && r.Due is { } due)
-            r.Due = Next(r.Repeat, due);
+        if (x.Repeat is not null && x.Due is { } due)
+            x.Due = Next(x.Repeat, due);
         else
-            r.DoneAt = DateTime.Now;
-        Save();
-    }
+            x.DoneAt = DateTime.Now;
+    });
 
-    public static void Undo(Reminder r)
-    {
-        r.DoneAt = null;
-        Save();
-    }
+    public static void Undo(Reminder r) => Change(r, x => x.DoneAt = null);
 
     public static void Snooze(Reminder r, TimeSpan by) => SnoozeUntil(r, DateTime.Now + by);
 
     // Moves just this time; a repeating reminder keeps its pattern and carries on from the new time
-    public static void SnoozeUntil(Reminder r, DateTime when)
-    {
-        r.Due = when;
-        Save();
-    }
+    public static void SnoozeUntil(Reminder r, DateTime when) => Change(r, x => x.Due = when);
 
     // Saves changes made to a reminder in the checklist
-    public static void Update(Reminder r, string text, DateTime? due, string? repeat, bool high, string? note)
+    public static void Update(Reminder r, string text, DateTime? due, string? repeat, bool high, string? note) => Change(r, x =>
     {
-        (r.Text, r.Due, r.Repeat, r.High) = (text, due, repeat, high);
-        r.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
-        Save();
-    }
+        (x.Text, x.Due, x.Repeat, x.High) = (text, due, repeat, high);
+        x.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+    });
 
     // Done in the last 30 days, newest first (today's also show ticked in Today)
     public static IEnumerable<Reminder> Completed() =>
         All.Where(r => r.DoneAt is { } done && done > DateTime.Now.AddDays(-30)).OrderByDescending(r => r.DoneAt);
 
-    public static void ClearCompleted()
-    {
-        All.RemoveAll(r => r.IsDone);
-        Save();
-    }
+    public static void ClearCompleted() => Change(all => all.RemoveAll(r => r.IsDone));
 
     public static IEnumerable<Reminder> DueNow() =>
         All.Where(r => !r.IsDone && r.Due is { } due && due <= DateTime.Now).OrderBy(r => r.Due);

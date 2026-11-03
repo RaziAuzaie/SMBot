@@ -3,6 +3,8 @@ bin/
 obj/
 publish/
 src/SMBot/SMBot.exe
+# Personal checklist and settings, shared between PCs through OneDrive only
+src/SMBot/data/
 
 # Visual Studio / editor files
 .vs/

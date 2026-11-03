@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using SMBot.Services;
 using SMBot.Views;
 
 namespace SMBot;
@@ -36,6 +37,10 @@ public partial class App : Application
             Shutdown();
             return;
         }
+
+        // Checklist and settings are shared by both PCs in the project's data folder
+        DataFolder.MoveOldData();
+        ReminderService.WatchForOtherPc();
 
         var bot = new BuddyWindow();
         MainWindow = bot;

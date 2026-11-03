@@ -23,5 +23,7 @@ $shortcut.WorkingDirectory = $project
 $shortcut.IconLocation = "$exe,0"
 $shortcut.Save()
 
-Start-Process $exe
+# Start it through Explorer, as the shortcut does. Started straight from a packaged app's terminal (e.g. the Claude
+# desktop app), Windows would redirect SMBot's AppData to that app's own folder and it would use a different checklist
+Start-Process explorer.exe "`"$exe`""
 "SMBot built and started: $exe"

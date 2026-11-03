@@ -876,14 +876,14 @@ public partial class BuddyWindow : Window
 
     const double BaseWidth = 500, BaseHeight = 440;   // tall enough for the action list with the music card on top
 
-    // Where it was last dragged to, if that's still on a screen (a monitor may have been unplugged); otherwise the corner
-    // Saved positions are for the full-size window; the compact one shares its bottom-right corner
+    // Where it was last dragged to on this PC, if that's still on a screen (a monitor may have been unplugged);
+    // otherwise the corner. Saved positions are for the medium-size window; other sizes share its bottom-right corner
     void PlaceWindow()
     {
         var s = SizeScale.ScaleX;
-        if (_settings.BotLeft is { } left && _settings.BotTop is { } top
-            && OnScreen(left + BaseWidth * s - Width, top + BaseHeight * s - Height))
-            (Left, Top) = (left + BaseWidth * s - Width, top + BaseHeight * s - Height);
+        if (_settings.MyPosition is { } pos
+            && OnScreen(pos.Left + BaseWidth * s - Width, pos.Top + BaseHeight * s - Height))
+            (Left, Top) = (pos.Left + BaseWidth * s - Width, pos.Top + BaseHeight * s - Height);
         else
             MoveToCorner();
     }
@@ -906,7 +906,7 @@ public partial class BuddyWindow : Window
     void SavePosition()
     {
         var s = SizeScale.ScaleX;
-        (_settings.BotLeft, _settings.BotTop) = (Left + Width - BaseWidth * s, Top + Height - BaseHeight * s);
+        _settings.MyPosition = new BotPosition(Left + Width - BaseWidth * s, Top + Height - BaseHeight * s);
         SettingsService.Save(_settings);
     }
 
